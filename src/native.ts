@@ -40,4 +40,5 @@ export type State = {
   inputMs?: number;
   outputMs?: number;
 };
-export type Meter = { peak: number; cpu: number };
+// Levels are peaks since the last update (output before the safety clipper); ram in MB.
+export type Meter = { peak: number; out: number; cpu: number; ram: number };

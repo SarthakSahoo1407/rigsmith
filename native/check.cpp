@@ -2,6 +2,7 @@
 // Build and run: cmake --build native/build --target RigCheck && native/build/RigCheck_artefacts/Release/RigCheck
 
 #include "Engine.h"
+#include "RigFile.h"
 #include <cstdio>
 
 using namespace juce;
@@ -76,6 +77,8 @@ static std::shared_ptr<rig::Node> make (const char* type, const std::vector<floa
     size_t i = 0;
     for (float v : params) node->p[i++] = v;
     node->prepareNode (SR, N);
+    node->configure();
+    Thread::sleep (60); // convolution IRs load on a background thread
     return node;
 }
 
@@ -98,7 +101,7 @@ static void checkDevices()
     const int second = (int) SR;
 
     { // Delay: one echo 100 ms after the dry impulse.
-        auto d = make ("delay", { 100, 0, 10, 1, 0 });
+        auto d = make ("delay", { 0, 100, 0, 10, 1, 0 });
         std::vector<float> imp ((size_t) second / 5);
         imp[0] = 1;
         auto out = renderNode (*d, { imp });
@@ -106,6 +109,23 @@ static void checkDevices()
         for (int i = 1; i < (int) out[0].size(); ++i) if (std::abs (out[0][(size_t) i]) > std::abs (out[0][(size_t) at])) at = i;
         CHECK (std::abs (at - second / 10) <= 1);
         CHECK (near (out[1][(size_t) at], out[0][(size_t) at], 1e-7f)); // plain delay: same echo on both sides
+    }
+    { // IR designer: a flat curve is a single click; -20 dB is a click a tenth as loud.
+        auto flat = rig::designIr (SR, 1024, { { 100, 0 }, { 1000, 0 } });
+        auto quiet = rig::designIr (SR, 1024, { { 100, -20 }, { 1000, -20 } });
+        float tail = 0;
+        for (int i = 1; i < 1024; ++i) tail += std::abs (flat.getSample (0, i));
+        CHECK (near (flat.getSample (0, 0), 1.0f, 0.01f) && tail < 0.01f);
+        CHECK (near (quiet.getSample (0, 0), 0.1f, 0.005f));
+    }
+    { // Cab: a 4x12 with aggressive speakers passes the upper mids and cuts the fizz above 6 kHz.
+        auto level = [&] (float hz) {
+            auto c = make ("cab", { 2, 1 });
+            return Decibels::gainToDecibels (rms (renderNode (*c, { sine (hz, 0.1f, second / 2) })[0], second / 4));
+        };
+        const float mids = level (2500), fizz = level (8000);
+        if (! (fizz < mids - 20)) std::printf ("  cab: 2.5k %.1f dB, 8k %.1f dB\n", mids, fizz);
+        CHECK (fizz < mids - 20);
     }
     { // Gate: shuts out hiss below the threshold, passes playing above it.
         auto g = make ("gate", { -50, 50 });
@@ -135,7 +155,7 @@ static void checkDevices()
         CHECK (near (rms (renderNode (*make ("volume", { 1 }), { in })[0], second / 8), rms (in, second / 8), 1e-4f));
     }
     { // Reverb: keeps ringing after the input stops.
-        auto r = make ("reverb", { 3, 20, 6, 0.5f });
+        auto r = make ("reverb", { 1, 3, 20, 6, 0.5f });
         std::vector<float> burst ((size_t) second);
         for (int i = 0; i < 2000; ++i) burst[(size_t) i] = (float) std::sin (i * 0.05);
         auto out = renderNode (*r, { burst, burst });
@@ -156,6 +176,35 @@ static void checkDevices()
         auto undone = renderNode (l, { zeros });
         CHECK (undone[0] == ramp);
     }
+    { // Pitch shift +12: the added voice is an octave up (220 Hz in, about 440 Hz out).
+        auto ps = make ("pitch", { 12, 0, 1 });
+        const auto in = sine (220, 0.2f, second);
+        auto out = renderNode (*ps, { in });
+        int crossings = 0;
+        for (int i = second / 2 + 1; i < second; ++i)
+        {
+            const float a = out[0][(size_t) i - 1] - in[(size_t) i - 1], b = out[0][(size_t) i] - in[(size_t) i];
+            if ((a < 0) != (b < 0)) ++crossings;
+        }
+        const float hz = (float) crossings / 2.0f / 0.5f;
+        if (! near (hz, 440, 25)) std::printf ("  pitch shift heard %.1f Hz\n", hz);
+        CHECK (near (hz, 440, 25));
+    }
+    // Every model of every multi-model effect stays finite and audible.
+    for (int m = 0; m < 4; ++m)
+        for (auto [type, params] : std::vector<std::pair<const char*, std::vector<float>>> {
+                 { "distortion", { (float) m, 6, 5, 6 } }, { "fuzz", { (float) (m % 2), 7, 5, 6 } }, { "boost", { (float) (m % 3), 12, 5 } },
+                 { "delay", { (float) (m % 3), 300, 0.4f, 5, 0.5f, (float) (m % 2) } }, { "reverb", { (float) m, 2, 20, 6, 0.5f } },
+                 { "acoustic", { (float) m, 0.7f, 5, 0 } } })
+        {
+            const auto in = sine (196, 0.2f, second / 2);
+            auto out = renderNode (*make (type, params), { in, in });
+            bool finite = true;
+            for (auto& ch : out) for (float v : ch) finite = finite && std::isfinite (v);
+            const float level = rms (out[0], second / 4);
+            if (! (finite && level > 0.01f && level < 2.0f)) std::printf ("  %s model %d: rms %.3f\n", type, m, level);
+            CHECK (finite && level > 0.01f && level < 2.0f);
+        }
     // Everything else: a sane, non-silent signal for a plain sine.
     for (auto [type, params] : std::vector<std::pair<const char*, std::vector<float>>> {
              { "octave", { 1, 0.5f, 0.5f } }, { "eq", { 6, 0, -6, 0, 3, 0, 0, 0 } }, { "wah", { 0.5f, 4 } },
@@ -216,7 +265,7 @@ int main()
     CHECK (run (e).l < 1e-4f);
 
     // Distortion: engaged changes the sound; bypassed passes it untouched. A knob turn keeps the same node.
-    const char* dist = R"({"nodes":[{"id":"i","type":"input","params":[0,0],"on":true},{"id":"d","type":"distortion","params":[%d,5,5],"on":%s},
+    const char* dist = R"({"nodes":[{"id":"i","type":"input","params":[0,0],"on":true},{"id":"d","type":"distortion","params":[0,%d,5,5],"on":%s},
         {"id":"o","type":"output","params":[1],"on":true}],
         "wires":[{"from":"i","out":0,"to":"d","in":0},{"from":"d","out":0,"to":"o","in":0}]})";
     std::snprintf (buf, sizeof buf, dist, 8, "true");
@@ -230,21 +279,39 @@ int main()
     r = run (e);
     CHECK (r.diff < 1e-3f);
 
-    // Full amp chain renders something sane in every voicing and cab size.
-    for (int voicing = 0; voicing < 3; ++voicing)
+    // Standalone tuner: hears the 440 Hz input with no tuner in the rig, and mutes the output.
+    e.tuning = true;
+    r = run (e, 200);
+    CHECK (near (e.tuner.detect(), 440.0f, 2.0f) && r.l < 1e-4f);
+    e.tuning = false;
+
+    // Full amp chain renders something sane in every amp model, cab size and speaker.
+    for (int voicing = 0; voicing < (int) std::size (rig::AMPS); ++voicing)
         for (int size = 0; size < 3; ++size)
         {
             std::snprintf (buf, sizeof buf, R"({"nodes":[{"id":"i","type":"input","params":[0,0],"on":true},
-                {"id":"a/pre","type":"amp/pre","params":[%d,7,5,5,5,5],"on":true},{"id":"a/power","type":"amp/power","params":[%d,7,5,5,5,5],"on":true},
-                {"id":"c","type":"cab","params":[%d],"on":true},{"id":"m","type":"mic","params":[0,0.3,0.2],"on":true},
+                {"id":"a/pre","type":"amp/pre","params":[%d,7,5,5,5,5,5],"on":true},{"id":"a/power","type":"amp/power","params":[%d,7,5,5,5,5,5],"on":true},
+                {"id":"c","type":"cab","params":[%d,%d],"on":true},{"id":"m","type":"mic","params":[0,0.3,0.2],"on":true},
                 {"id":"o","type":"output","params":[1],"on":true}],
                 "wires":[{"from":"i","out":0,"to":"a/pre","in":0},{"from":"a/pre","out":0,"to":"a/power","in":0},
                          {"from":"a/power","out":0,"to":"c","in":0},{"from":"c","out":0,"to":"m","in":0},{"from":"m","out":0,"to":"o","in":0}]})",
-                voicing, voicing, size);
+                voicing, voicing, size, (voicing + size) % 4);
             e.setRig (rigJson (buf));
+            Thread::sleep (60);
             r = run (e, 200);
+            if (! (r.finite && r.l > 0.01f && r.l < 1.0f)) std::printf ("  amp model %d, cab %d: rms %.3f\n", voicing, size, r.l);
             CHECK (r.finite && r.l > 0.01f && r.l < 1.0f);
         }
+
+    { // Rig files: round trip, and a flipped byte or a plain JSON file is refused.
+        const String json = R"({"version":1,"devices":{},"cables":[],"name":"Ångström ✓"})";
+        auto sealed = rigfile::seal (json);
+        CHECK (rigfile::isRigFile (sealed) && rigfile::open (sealed) == json);
+        CHECK (sealed.toString().indexOf ("devices") < 0); // nothing readable inside
+        static_cast<char*> (sealed.getData())[40] ^= 1;
+        CHECK (! rigfile::open (sealed).has_value());
+        CHECK (! rigfile::open (MemoryBlock (json.toRawUTF8(), json.getNumBytesAsUTF8())).has_value());
+    }
 
     std::printf (failures == 0 ? "engine check: all passed\n" : "engine check: %d failed\n", failures);
     return failures == 0 ? 0 : 1;

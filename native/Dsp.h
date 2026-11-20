@@ -58,7 +58,9 @@ struct Biquad
 // Runs a waveshaper at 4x the sample rate so distortion doesn't alias into fizz.
 struct Shaper
 {
-    dsp::Oversampling<float> os { 1, 2, dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false };
+    explicit Shaper (size_t factorLog2 = 2) : os (1, factorLog2, dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false) {}
+    dsp::Oversampling<float> os;
+    double rate (double sr) const { return sr * (double) os.getOversamplingFactor(); }
     void prepare (int maxBlock) { os.initProcessing ((size_t) maxBlock); os.reset(); }
 
     template <typename F>
@@ -119,6 +121,9 @@ struct Node
                 out[c][i] = g * out[c][i] + (1.0f - g) * (numIns > 0 ? in[std::min (c, numIns - 1)][i] : 0.0f);
         }
     }
+
+    // Message thread, after knob values arrive: for work that may allocate, like loading an IR.
+    virtual void configure() {}
 
 protected:
     virtual void prepare (int /*maxBlock*/) {}
@@ -190,5 +195,58 @@ struct Envelope
         return env;
     }
 };
+
+// A minimum-phase impulse response whose magnitude follows `curve` ({Hz, dB} points, joined on a
+// log-frequency axis), plus seeded ripple: narrow random peaks and notches above `rippleFrom` Hz, the
+// fine detail (cone break-up, wood modes) that makes a measured response sound real and an EQ sound
+// like an EQ. Minimum phase via the folded cepstrum, so the IR starts at once and adds no latency.
+using Curve = std::vector<std::pair<float, float>>;
+inline AudioBuffer<float> designIr (double sr, int length, const Curve& curve, float rippleDb = 0, float rippleFrom = 1000, int seed = 1)
+{
+    constexpr int order = 14, N = 1 << order;
+    dsp::FFT fft (order);
+    struct Bump { float hz, db, width; };
+    std::vector<Bump> bumps;
+    Random rng (seed);
+    for (int i = 0; i < 24 && rippleDb > 0; ++i)
+        bumps.push_back ({ rippleFrom * std::pow (12000.0f / rippleFrom, rng.nextFloat()), (rng.nextFloat() * 2 - 1) * rippleDb, 0.03f + 0.06f * rng.nextFloat() });
+    auto dbAt = [&] (float hz) {
+        hz = std::max (hz, 1.0f);
+        float db = curve.front().second;
+        for (size_t i = 1; i < curve.size(); ++i)
+            if (hz >= curve[i - 1].first)
+            {
+                const float a = std::log (curve[i - 1].first), b = std::log (curve[i].first);
+                db = hz >= curve[i].first ? curve[i].second
+                                          : curve[i - 1].second + (std::log (hz) - a) / (b - a) * (curve[i].second - curve[i - 1].second);
+            }
+        for (const auto& k : bumps)
+        {
+            const float o = std::log2 (hz / k.hz) / k.width; // distance in bump widths (octaves)
+            db += k.db * std::exp (-o * o);
+        }
+        return std::max (db, -90.0f);
+    };
+
+    std::vector<dsp::Complex<float>> a ((size_t) N), b ((size_t) N);
+    for (int k = 0; k < N; ++k)
+    {
+        const int bin = k <= N / 2 ? k : N - k;
+        a[(size_t) k] = { dbAt ((float) (bin * sr / N)) * 0.11512925f, 0.0f }; // dB to natural log
+    }
+    fft.perform (a.data(), b.data(), true); // real cepstrum
+    for (int k = 1; k < N / 2; ++k) b[(size_t) k] *= 2.0f;
+    for (int k = N / 2 + 1; k < N; ++k) b[(size_t) k] = 0.0f;
+    fft.perform (b.data(), a.data(), false);
+    for (auto& v : a) v = std::exp (v);
+    fft.perform (a.data(), b.data(), true);
+
+    length = std::min (length, N);
+    AudioBuffer<float> ir (1, length);
+    const int fade = length / 8;
+    for (int i = 0; i < length; ++i)
+        ir.setSample (0, i, b[(size_t) i].real() * (i > length - fade ? (float) (length - i) / (float) fade : 1.0f));
+    return ir;
+}
 
 } // namespace rig

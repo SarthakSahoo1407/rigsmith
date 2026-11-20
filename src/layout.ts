@@ -17,7 +17,7 @@ const WIDE = new Set<DeviceType>(['eq', 'compressor', 'delay', 'reverb', 'looper
 const STAGE_GEAR = new Set<DeviceType>(['amp', 'cab', 'mic']);
 const DESK_GEAR = new Set<DeviceType>(['input', 'output', 'power']);
 
-export const ROW_H = 336; // pedal slot height including the gap to the next row
+export const ROW_H = 352; // pedal slot height including the gap to the next row
 const ROW_W = 1180; // usable board width
 const PAD = 32;
 const SLOT_GAP = 20;
@@ -26,14 +26,14 @@ export function gearSize(d: Device): Size {
   switch (d.type) {
     case 'amp': return { w: 520, h: 196 };
     case 'cab': return [{ w: 300, h: 292 }, { w: 440, h: 292 }, { w: 520, h: 440 }][d.params.size] ?? { w: 440, h: 292 };
-    case 'mic': return { w: 104, h: 236 };
-    case 'input': return { w: 148, h: 184 };
+    case 'mic': return { w: 120, h: 272 };
+    case 'input': return { w: 148, h: 248 };
     case 'output': return { w: 224, h: 184 };
     case 'power': return { w: 336, h: 60 };
     case 'splitter': return { w: 112, h: 140 };
     case 'joiner': return { w: 156, h: 176 };
-    case 'wah': case 'volume': return { w: 124, h: 296 };
-    default: return { w: WIDE.has(d.type) ? 180 : 140, h: 296 };
+    case 'wah': case 'volume': return { w: 124, h: 312 };
+    default: return { w: WIDE.has(d.type) ? 180 : 140, h: 312 };
   }
 }
 
@@ -117,7 +117,7 @@ export function layoutBoard(rig: Rig): Layout {
 
   // Desk: interface left of the stage, guitar input right of the board.
   devices.filter((d) => d.type === 'output').sort(byX).forEach((d, i) => { pos[d.id] = { x: -360, y: 40 + i * 216 }; });
-  devices.filter((d) => d.type === 'input').sort(byX).forEach((d, i) => { pos[d.id] = { x: boardRight + 56, y: boardTop + 40 + i * 216 }; });
+  devices.filter((d) => d.type === 'input').sort(byX).forEach((d, i) => { pos[d.id] = { x: boardRight + 56, y: boardTop + 40 + i * 280 }; });
 
   const zones: Zone[] = [{ id: 'zone:board', kind: 'board', x: boardLeft, y: boardTop, w: boardW, h: boardH }];
   if (stageH) zones.push({ id: 'zone:stage', kind: 'stage', x: -48, y: -48, w: stageW + 96, h: stageH + 96 });
@@ -145,4 +145,62 @@ export function dropHints(rig: Rig, layout: Layout, id: string, dropped: XY): Re
     if (partner) hints[partner.from.device === id ? partner.to.device : partner.from.device] = { ...hints[id] };
   }
   return hints;
+}
+
+// ---- Grid view: Quad Cortex-style rows and columns of equal tiles ----
+// Column = how many devices the signal has passed through (longest path); a device sits on its
+// first parent's row when that cell is free, so a split opens a new row. Power gear is hidden.
+// Cables into an amp's Return are loop returns: they don't push the amp to a later column.
+
+export const TILE = { w: 168, h: 92, colGap: 64, rowGap: 32 };
+
+export function layoutGrid(rig: Rig): Record<string, XY> {
+  const shown = Object.values(rig.devices).filter((d) => d.type !== 'power');
+  const ids = new Set(shown.map((d) => d.id));
+  const edges: [string, string][] = [];
+  for (const c of rig.cables) {
+    if (!ids.has(c.from.device) || !ids.has(c.to.device) || c.from.device === c.to.device) continue;
+    if (rig.devices[c.to.device].type === 'amp' && c.to.jack === 'return') continue;
+    edges.push([c.from.device, c.to.device]);
+  }
+  for (const d of shown) if (d.mic && ids.has(d.mic.cab)) edges.push([d.mic.cab, d.id]);
+
+  // Longest-path columns (Kahn's order). Devices nothing reaches start at column 0.
+  const indeg = new Map(shown.map((d) => [d.id, 0]));
+  for (const [, b] of edges) indeg.set(b, indeg.get(b)! + 1);
+  const col = new Map(shown.map((d) => [d.id, 0]));
+  const order: string[] = [];
+  const queue = shown.filter((d) => indeg.get(d.id) === 0).sort((a, b) => (a.type === 'input' ? -1 : b.type === 'input' ? 1 : 0)).map((d) => d.id);
+  while (queue.length) {
+    const id = queue.shift()!;
+    order.push(id);
+    for (const [a, b] of edges) if (a === id) {
+      col.set(b, Math.max(col.get(b)!, col.get(a)! + 1));
+      indeg.set(b, indeg.get(b)! - 1);
+      if (indeg.get(b) === 0) queue.push(b);
+    }
+  }
+  for (const d of shown) if (!order.includes(d.id)) order.push(d.id); // only if a loop slipped through
+
+  // Rows: follow the first parent; on a clash take the next free row. Unconnected gear goes last.
+  const connected = new Set(edges.flat());
+  const row = new Map<string, number>();
+  const taken = new Set<string>();
+  const place = (id: string, want: number) => {
+    let r = want;
+    while (taken.has(`${col.get(id)}:${r}`)) r++;
+    row.set(id, r);
+    taken.add(`${col.get(id)}:${r}`);
+  };
+  for (const id of order.filter((i) => connected.has(i))) {
+    const parent = edges.find(([, b]) => b === id)?.[0];
+    place(id, parent !== undefined && row.has(parent) ? row.get(parent)! : 0);
+  }
+  const spare = Math.max(-1, ...row.values()) + 1;
+  order.filter((i) => !connected.has(i)).forEach((id, i) => { col.set(id, i); place(id, spare); });
+
+  return Object.fromEntries(shown.map((d) => [d.id, {
+    x: col.get(d.id)! * (TILE.w + TILE.colGap),
+    y: row.get(d.id)! * (TILE.h + TILE.rowGap),
+  }]));
 }

@@ -7,10 +7,11 @@ FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.
 FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(Rig
-  PRODUCT_NAME "Rig"
+  PRODUCT_NAME "Rigsmith"
   BUNDLE_ID com.multifx.rig
+  ICON_BIG ${CMAKE_SOURCE_DIR}/icon.png
   MICROPHONE_PERMISSION_ENABLED TRUE
-  MICROPHONE_PERMISSION_TEXT "Rig needs your audio interface input to hear your guitar.")
+  MICROPHONE_PERMISSION_TEXT "Rigsmith needs your audio interface input to hear your guitar.")
 
 target_sources(Rig PRIVATE Main.cpp)
 target_compile_definitions(Rig PRIVATE JUCE_WEB_BROWSER=1 JUCE_USE_CURL=0)
@@ -31,3 +32,10 @@ add_custom_target(RigUi ALL
   COMMAND ${CMAKE_COMMAND} -E rm -rf $<TARGET_BUNDLE_CONTENT_DIR:Rig>/Resources/ui
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/../dist $<TARGET_BUNDLE_CONTENT_DIR:Rig>/Resources/ui
   DEPENDS Rig)
+
+# Offline renderer: plays a guitar part (synthesised or a DI .wav) through a compiled rig into a WAV.
+juce_add_console_app(RigRender PRODUCT_NAME "RigRender")
+target_sources(RigRender PRIVATE render.cpp)
+target_compile_definitions(RigRender PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(RigRender PRIVATE juce::juce_audio_devices juce::juce_audio_formats juce::juce_dsp
+  PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

@@ -1,25 +1,32 @@
-// How each device looks on the Board, drawn like the real thing: powder-coated stompboxes, a tolex
-// amp head with a brushed panel, cabs with grille cloth, mics on stands. Every device carries a
-// strip of gaffer tape with its name, the way players label a real board. The Grid uses plain boxes.
+// How each device looks on the Board, drawn like the real thing: glossy compact stompboxes with a
+// hinged pedal plate, tolex amp heads, cabs with grille cloth, mics on boom stands. Every piece
+// carries its maker's name, the way a real rig mixes brands (catalog.ts MAKER). A strip of gaffer
+// tape marks duplicates and gear that has no power.
 
-import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode, WheelEvent } from 'react';
-import { def, type DeviceType, type Param } from './catalog';
+import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent, ReactNode, WheelEvent } from 'react';
+import { def, MAKER, nameOf, VARIANTS, type DeviceType, type Item, type Param } from './catalog';
 import { call } from './native';
 import { isPowered, placeMic, setParam, toggle, type Device, type Rig } from './rig';
 
 export type Edit = (change: (rig: Rig) => Rig, group?: string) => void;
-// Live readouts from the engine, by device id: tuner pitch, looper state.
-export type Live = Record<string, { hz?: number; mode?: string; length?: number; position?: number }>;
+// Live readouts from the engine, by device id: tuner pitch, looper state, gate open/closed.
+export type Live = Record<string, { hz?: number; mode?: string; length?: number; position?: number; open?: boolean }>;
 type Props = { d: Device; rig: Rig; edit: Edit; inputs: string[]; live: Live };
 
 const fmt = (p: Param, v: number) => (p.options ? p.options[v] : String(Number(v.toFixed(p.max - p.min > 20 ? 0 : 2))));
 const LABELS: Record<string, string> = { makeup: 'gain', predelay: 'pre', feedback: 'repeats', pingpong: 'ping-pong', reference: 'ref', threshold: 'thresh' };
 const label = (name: string) => LABELS[name] ?? name;
+const UNITS: Record<string, string> = { time: ' ms', predelay: ' ms', release: ' ms', attack: ' ms', decay: ' s', threshold: ' dB', makeup: ' dB', detune: ' ct', interval: ' st', trim: ' dB', reference: ' Hz' };
+export const readout = (p: Param, v: number) => fmt(p, v) + (p.options ? '' : (UNITS[p.name] ?? ''));
 
-// The name on the tape: "Delay", or "Delay 2" when there is more than one.
+export const deviceName = (d: Device) => nameOf(d.type, d.params);
+
+// The name on the tape: "Tape Echo", or "Tape Echo 2" when the rig has more than one.
 export function tapeName(rig: Rig, d: Device) {
-  const many = Object.values(rig.devices).filter((x) => x.type === d.type).length > 1;
-  return many ? `${def(d.type).label} ${d.id.split('-').pop()}` : def(d.type).label;
+  const name = deviceName(d);
+  const same = Object.values(rig.devices).filter((x) => deviceName(x) === name).map((x) => x.id)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return same.length > 1 ? `${name} ${same.indexOf(d.id) + 1}` : name;
 }
 
 // Vertical drag sets a value; one drag is one undo step.
@@ -39,16 +46,18 @@ function dragger(value: number, min: number, max: number, onChange: (v: number, 
 function arrows(value: number, min: number, max: number, onChange: (v: number) => void) {
   return (e: KeyboardEvent) => {
     const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1 }[e.key];
-    if (step) { e.preventDefault(); onChange(value + (step * (max - min)) / 50); }
+    if (step) { e.preventDefault(); e.stopPropagation(); onChange(value + (step * (max - min)) / 50); }
   };
 }
 
 const sliderProps = (p: Param, value: number) => ({
   role: 'slider', tabIndex: 0, 'aria-label': p.name, 'aria-valuemin': p.min, 'aria-valuemax': p.max,
-  'aria-valuenow': value, 'aria-valuetext': fmt(p, value), title: `${label(p.name)}: ${fmt(p, value)}`,
+  'aria-valuenow': value, 'aria-valuetext': readout(p, value), title: `${label(p.name)}: ${readout(p, value)}`,
 });
+// Double-click resets a control; it must not also open the device window.
+const reset = (fn: () => void) => (e: MouseEvent) => { e.stopPropagation(); fn(); };
 
-export type KnobStyle = 'small' | 'pedal' | 'amp';
+export type KnobStyle = 'small' | 'pedal' | 'amp' | 'big';
 
 // Rotary knob: drag up/down, arrow keys, double-click for default. Choices render as a selector switch.
 export function Knob({ p, value, onChange, look = 'small' }: { p: Param; value: number; onChange: (v: number, group?: string) => void; look?: KnobStyle }) {
@@ -56,10 +65,10 @@ export function Knob({ p, value, onChange, look = 'small' }: { p: Param; value: 
   const angle = -150 + ((value - p.min) / (p.max - p.min)) * 300;
   return (
     <div className={`knob knob-${look} nodrag`} {...sliderProps(p, value)}
-      onPointerDown={dragger(value, p.min, p.max, onChange)} onKeyDown={arrows(value, p.min, p.max, onChange)} onDoubleClick={() => onChange(p.def)}>
+      onPointerDown={dragger(value, p.min, p.max, onChange)} onKeyDown={arrows(value, p.min, p.max, onChange)} onDoubleClick={reset(() => onChange(p.def))}>
       <svg viewBox="-20 -20 40 40" aria-hidden>
-        {look === 'amp' && Array.from({ length: 11 }, (_, i) => (
-          <line key={i} y1="-18.5" y2={i % 5 === 0 ? -15.5 : -16.8} className="knob-tick" transform={`rotate(${-150 + i * 30})`} />
+        {(look === 'amp' || look === 'big') && Array.from({ length: 11 }, (_, i) => (
+          <line key={i} y1="-19.5" y2={i % 5 === 0 ? -16.5 : -17.8} className="knob-tick" transform={`rotate(${-150 + i * 30})`} />
         ))}
         {look === 'amp' ? (
           <g transform={`rotate(${angle})`}>
@@ -69,13 +78,14 @@ export function Knob({ p, value, onChange, look = 'small' }: { p: Param; value: 
           </g>
         ) : (
           <>
-            <circle r={look === 'pedal' ? 14 : 15} className="knob-skirt" />
-            <circle r={look === 'pedal' ? 10.5 : 11} className="knob-cap" />
-            <line y1={look === 'pedal' ? -4 : -3} y2={look === 'pedal' ? -13 : -14} className="knob-mark" transform={`rotate(${angle})`} />
+            <circle r={look === 'small' ? 15 : 14} className="knob-skirt" />
+            <circle r={look === 'small' ? 11 : 10} className="knob-cap" />
+            <line y1="-3.5" y2={look === 'small' ? -14 : -13} className="knob-mark" transform={`rotate(${angle})`} />
           </>
         )}
       </svg>
       <span>{label(p.name)}</span>
+      {look === 'big' && <output>{readout(p, value)}</output>}
     </div>
   );
 }
@@ -97,27 +107,61 @@ function Fader({ p, value, onChange, text }: { p: Param; value: number; onChange
   const frac = (value - p.min) / (p.max - p.min);
   return (
     <div className="fader nodrag" {...sliderProps(p, value)} onPointerDown={dragger(value, p.min, p.max, onChange, 60)}
-      onKeyDown={arrows(value, p.min, p.max, onChange)} onDoubleClick={() => onChange(p.def)}>
+      onKeyDown={arrows(value, p.min, p.max, onChange)} onDoubleClick={reset(() => onChange(p.def))}>
       <div className="fader-slot"><div className="fader-cap" style={{ bottom: `calc(${frac * 100}% - 5px)` }} /></div>
       <span>{text}</span>
     </div>
   );
 }
 
+// Model pickers are nameplates, not knobs. A pedal whose models are separate pedals has none.
+const PLATES = new Set(['model', 'body', 'speaker']);
+export const plateParams = (type: DeviceType) => def(type).params.filter((p) => PLATES.has(p.name) && !(p.name === 'model' && VARIANTS[type]));
+export const knobParams = (type: DeviceType) => def(type).params.filter((p) => !PLATES.has(p.name));
+
+export function ModelPlate({ d, edit, name }: Pick<Props, 'd' | 'edit'> & { name: string }) {
+  const p = def(d.type).params.find((x) => x.name === name)!;
+  return (
+    <select className="plate-select nodrag" aria-label={`${def(d.type).label} ${name}`} value={d.params[name]}
+      onChange={(e) => edit((r) => setParam(r, d.id, name, Number(e.target.value)))}>
+      {p.options!.map((o, i) => <option key={o} value={i}>{o}</option>)}
+    </select>
+  );
+}
+
 const knobs = ({ d, edit }: Props, look: KnobStyle, only?: (p: Param) => boolean) =>
-  def(d.type).params.filter((p) => !only || only(p)).map((p) => (
+  knobParams(d.type).filter((p) => !only || only(p)).map((p) => (
     <Knob key={p.name} p={p} look={look} value={d.params[p.name]} onChange={(v, g) => edit((r) => setParam(r, d.id, p.name, v), g)} />
   ));
 
 const Tape = ({ children, className = '' }: { children: ReactNode; className?: string }) => <div className={`tape ${className}`}>{children}</div>;
 const Screws = () => <>{['tl', 'tr', 'bl', 'br'].map((c) => <span key={c} className={`screw ${c}`} />)}</>;
+// Tape only where a player would put it: to tell two identical pieces apart, or to flag no power.
+function TapeIf({ rig, d, className }: { rig: Rig; d: Device; className?: string }) {
+  const name = tapeName(rig, d);
+  const powered = isPowered(rig, d.id);
+  if (name === deviceName(d) && powered) return null;
+  return <Tape className={className}>{name}{!powered && <em> · no power</em>}</Tape>;
+}
 
 // Enclosure colours: powder coat, each picked so two pedals side by side never look alike.
 const PEDALS: Partial<Record<DeviceType, string>> = {
   tuner: '#242427', gate: '#4a4f57', compressor: '#2b5d8f', boost: '#d9d0b4', distortion: '#d9661f', fuzz: '#8e9fb3',
   octave: '#54306f', eq: '#e3e1da', chorus: '#6fb3cc', flanger: '#5f3d8a', phaser: '#c4441c', tremolo: '#1d7468',
-  delay: '#2f6b37', reverb: '#22314f', looper: '#7c2230',
+  delay: '#2f6b37', reverb: '#22314f', looper: '#7c2230', pitch: '#2f5d8c', acoustic: '#8a5a32',
+  wah: '#1c1c1e', volume: '#1c1c1e', amp: '#c9a24e', cab: '#3a342a', mic: '#8d9098', splitter: '#b9babd', joiner: '#b9babd',
+  power: '#26262a', input: '#b9babd', output: '#2b2c30',
 };
+// Pedals that are several pedals in real life, one enclosure colour per model (catalog VARIANTS order).
+const MODEL_COLORS: Partial<Record<DeviceType, string[]>> = {
+  distortion: ['#3c8a4a', '#e07a1f', '#c9b48a', '#1f1f22'],
+  fuzz: ['#8e9fb3', '#b23a2e'],
+  boost: ['#d9d0b4', '#b5482a', '#2e6b8f'],
+  delay: ['#e2e3e5', '#7a5a3a', '#3d4a7a'],
+  reverb: ['#22314f', '#5b6e8f', '#c9c4b8', '#5b4a3a'],
+};
+export const colorOf = (type: DeviceType, params: Record<string, number> = {}) =>
+  MODEL_COLORS[type]?.[params.model ?? 0] ?? PEDALS[type] ?? '#444';
 
 const isLight = (hex: string) => {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -126,9 +170,9 @@ const isLight = (hex: string) => {
 
 const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 
-function TunerScreen({ d, live }: Props) {
+export function TunerScreen({ d, live }: Props) {
   const hz = live[d.id]?.hz ?? 0;
-  if (!d.on) return <div className="screen off">mute to tune</div>;
+  if (!d.on) return <div className="screen off">stomp to tune</div>;
   if (!hz) return <div className="screen"><b>–</b><div className="cents" /></div>;
   const n = 12 * Math.log2(hz / d.params.reference) + 69;
   const cents = Math.round((n - Math.round(n)) * 100);
@@ -141,7 +185,7 @@ function TunerScreen({ d, live }: Props) {
   );
 }
 
-function LooperScreen({ d, live }: Props) {
+export function LooperScreen({ d, live }: Props) {
   const s = live[d.id] ?? {};
   const mode = s.mode ?? 'empty';
   const progress = s.length ? (s.position ?? 0) / s.length : 0;
@@ -162,38 +206,46 @@ function LooperScreen({ d, live }: Props) {
   );
 }
 
+// Compact stompbox: controls up top with the check light, a big hinged pedal plate you stomp
+// (the whole plate is the switch), and the maker's label along the bottom.
 function Pedal(props: Props) {
   const { d, rig, edit } = props;
-  const dd = def(d.type);
-  const color = PEDALS[d.type] ?? '#444';
+  const color = colorOf(d.type, d.params);
+  const plates = plateParams(d.type);
   const powered = isPowered(rig, d.id);
   const looper = d.type === 'looper';
   const mode = props.live[d.id]?.mode;
   const lit = looper ? powered && !!mode && mode !== 'empty' && mode !== 'stopped' : powered && d.on;
-  const bands = dd.params.filter((p) => p.name.endsWith('Hz'));
+  const bands = knobParams(d.type).filter((p) => p.name.endsWith('Hz'));
+  const gateOpen = d.type === 'gate' && lit && props.live[d.id]?.open;
   return (
     <div className={`pedal${isLight(color) ? ' light' : ''}`} style={{ '--body': color } as CSSProperties}>
-      <Screws />
-      {bands.length > 0 && (
-        <div className="faders">
-          {bands.map((p) => {
-            const hz = parseInt(p.name);
-            return <Fader key={p.name} p={p} text={hz >= 1000 ? `${hz / 1000}k` : String(hz)}
-              value={d.params[p.name]} onChange={(v, g) => edit((r) => setParam(r, d.id, p.name, v), g)} />;
-          })}
+      <div className="pedal-face">
+        <div className="pedal-lights">
+          <span className={`led${lit ? ' lit' : ''}${mode === 'recording' ? ' rec' : ''}`} title={lit ? 'On' : 'Off'} />
+          {d.type === 'gate' && <span className={`led green${gateOpen ? ' lit' : ''}`} title={gateOpen ? 'Gate open: you are playing' : 'Gate closed: muting noise'} />}
         </div>
-      )}
-      <div className="pedal-knobs">{knobs(props, 'pedal', (p) => !p.name.endsWith('Hz'))}</div>
-      {d.type === 'tuner' && <TunerScreen {...props} />}
-      {looper && <LooperScreen {...props} />}
-      <div className="pedal-print">{dd.label}</div>
-      <span className={`led${lit ? ' lit' : ''}${mode === 'recording' ? ' rec' : ''}`} />
-      <button className="stomp nodrag" aria-label={looper ? 'Looper: record, play, overdub' : `${dd.label} footswitch`}
+        {bands.length > 0 && (
+          <div className="faders">
+            {bands.map((p) => {
+              const hz = parseInt(p.name);
+              return <Fader key={p.name} p={p} text={hz >= 1000 ? `${hz / 1000}k` : String(hz)}
+                value={d.params[p.name]} onChange={(v, g) => edit((r) => setParam(r, d.id, p.name, v), g)} />;
+            })}
+          </div>
+        )}
+        {plates.map((p) => <ModelPlate key={p.name} d={d} edit={edit} name={p.name} />)}
+        <div className="pedal-knobs">{knobs(props, 'pedal', (p) => !p.name.endsWith('Hz'))}</div>
+        {d.type === 'tuner' && <TunerScreen {...props} />}
+        {looper && <LooperScreen {...props} />}
+      </div>
+      <button className="pedal-plate nodrag" aria-label={looper ? 'Looper: record, play, overdub' : `${deviceName(d)} footswitch`}
         aria-pressed={looper ? undefined : d.on}
         onClick={() => (looper ? call('looper', d.id, 'main') : edit((r) => toggle(r, d.id)))}>
-        <span className="stomp-cap" />
+        <span className="plate-pad" />
       </button>
-      <Tape>{tapeName(rig, d)}{!powered && <em> · no power</em>}</Tape>
+      <div className="pedal-label"><b>{MAKER[d.type]}</b><span>{deviceName(d)}</span></div>
+      <TapeIf rig={rig} d={d} />
     </div>
   );
 }
@@ -220,7 +272,8 @@ function Treadle(props: Props) {
           </button>
         )}
       </div>
-      <Tape>{tapeName(rig, d)}{!powered && <em> · no power</em>}</Tape>
+      <div className="treadle-maker">{MAKER[d.type]} · {deviceName(d)}</div>
+      <TapeIf rig={rig} d={d} />
     </div>
   );
 }
@@ -228,21 +281,22 @@ function Treadle(props: Props) {
 function Amp(props: Props) {
   const { rig, d, edit } = props;
   const loaded = rig.cables.some((c) => c.from.device === d.id && c.from.jack === 'speaker');
-  const voicing = def('amp').params[0];
   return (
-    <div className="amp">
+    <div className={`amp amp-m${d.params.model}`}>
       <span className="corner tl" /><span className="corner tr" />
       <div className="amp-panel">
-        <span className="badge">RIG</span>
-        <Selector p={voicing} value={d.params.voicing} onChange={(v) => edit((r) => setParam(r, d.id, 'voicing', v))} />
-        <div className="amp-knobs">{knobs(props, 'amp', (p) => p.name !== 'voicing')}</div>
+        <div className="amp-id"><ModelPlate d={d} edit={edit} name="model" /></div>
+        <div className="amp-knobs">{knobs(props, 'amp')}</div>
         <div className="amp-power">
           <span className="toggle" title="Power" /><span className="toggle" title="Standby" />
           <span className="jewel" title="On" />
         </div>
       </div>
-      <div className="amp-grille">{!loaded && <span className="warn">no load: cable a cab</span>}</div>
-      <Tape className="on-top">{tapeName(rig, d)}</Tape>
+      <div className="amp-grille">
+        <span className="logo">{MAKER.amp}</span>
+        {!loaded && <span className="warn">no load: cable a cab</span>}
+      </div>
+      <TapeIf rig={rig} d={d} className="on-top" />
     </div>
   );
 }
@@ -250,30 +304,33 @@ function Amp(props: Props) {
 function Cab(props: Props) {
   const { d, rig, edit } = props;
   const size = d.params.size;
-  const mics = Object.values(rig.devices).filter((m) => m.mic?.cab === d.id);
+  const cones = [1, 2, 4][size];
+  const mics = Object.values(rig.devices).filter((m) => m.mic?.cab === d.id).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
   const sizes = def('cab').params[0].options!;
   return (
-    <div className={`cab cab-${size}`}>
+    <div className={`cab cab-${size} spk-${d.params.speaker}`}>
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <div className="cab-grille">
-        {Array.from({ length: [1, 2, 4][size] }, (_, i) => (
+        <span className="logo">{MAKER.cab}</span>
+        {Array.from({ length: cones }, (_, i) => (
           <div key={i} className="speaker">
-            {i === 0 && mics.map((m) => (
-              <span key={m.id} className="mic-spot" title={`${tapeName(rig, m)}: ${Math.round(m.mic!.x * 100)}% toward the edge`}
-                style={{ left: `${50 + m.mic!.x * 42}%`, width: 16 - m.mic!.distance * 8, height: 16 - m.mic!.distance * 8 }} />
+            {/* Each mic gets its own cone, the way a stereo pair is set up on a real cab. */}
+            {mics.filter((_, k) => k % cones === i).map((m) => (
+              <span key={m.id} className="mic-spot" title={`${tapeName(rig, m)}: ${Math.round(m.mic!.x * 100)}% toward the edge, ${Math.round(m.mic!.distance * 30)} cm back`}
+                style={{ left: `${50 + m.mic!.x * 42}%`, width: 18 - m.mic!.distance * 8, height: 18 - m.mic!.distance * 8 }} />
             ))}
           </div>
         ))}
       </div>
       <div className="cab-foot">
-        <span className="badge">RIG</span>
+        <ModelPlate d={d} edit={edit} name="speaker" />
         <div className="size-pick nodrag" role="radiogroup" aria-label="Cab size">
           {sizes.map((s, i) => (
             <button key={s} role="radio" aria-checked={i === size} className={i === size ? 'on' : ''} onClick={() => edit((r) => setParam(r, d.id, 'size', i))}>{s}</button>
           ))}
         </div>
       </div>
-      <Tape className="on-top">{tapeName(rig, d)}</Tape>
+      <TapeIf rig={rig} d={d} className="on-top" />
     </div>
   );
 }
@@ -295,24 +352,67 @@ export function MicControls({ d, edit, look = 'small' }: Pick<Props, 'd' | 'edit
   );
 }
 
+// The three mics, drawn as the classics they're modelled on: a slim dynamic with a tapered grille,
+// a ribbon with its slotted bronze body, a large-diaphragm condenser with a mesh head.
+export function MicArt({ model }: { model: number }) {
+  return (
+    <svg viewBox="0 0 80 120" aria-hidden className="mic-art">
+      <defs>
+        <linearGradient id={`mg${model}`} x1="0" x2="1">
+          <stop offset="0" stopColor={['#2a2b2f', '#5a4326', '#9ea1a6'][model]} />
+          <stop offset=".45" stopColor={['#5a5c63', '#b8935a', '#f1f2f4'][model]} />
+          <stop offset="1" stopColor={['#1b1c1f', '#4a361d', '#8a8d92'][model]} />
+        </linearGradient>
+        <pattern id={`mesh${model}`} width="3" height="3" patternUnits="userSpaceOnUse">
+          <rect width="3" height="3" fill={model === 1 ? '#2b2116' : '#b9bbbf'} />
+          <circle cx="1.5" cy="1.5" r=".9" fill={model === 1 ? '#7a5a30' : '#6e7075'} />
+        </pattern>
+      </defs>
+      <path d="M 18 116 L 40 104 L 62 116 M 40 104 L 40 116" className="stand" />
+      <line x1="40" y1="104" x2="40" y2="62" className="stand" />
+      <circle cx="40" cy="62" r="3" className="stand-joint" />
+      <line x1="40" y1="62" x2="40" y2="52" className="stand" />
+      {model === 0 && (
+        <g>
+          <path d="M 35 52 L 34 26 L 46 26 L 45 52 Z" fill={`url(#mg${model})`} />
+          <path d="M 34 26 L 33 12 Q 40 4 47 12 L 46 26 Z" fill={`url(#mesh${model})`} stroke="#3a3b3f" />
+          <rect x="34" y="25" width="12" height="2" fill="#c9cbcf" />
+        </g>
+      )}
+      {model === 1 && (
+        <g>
+          <rect x="37" y="42" width="6" height="12" fill="#2a2016" />
+          <rect x="27" y="6" width="26" height="38" rx="12" fill={`url(#mg${model})`} />
+          <rect x="31" y="11" width="18" height="28" rx="8" fill={`url(#mesh${model})`} />
+          {[16, 22, 28, 34].map((y) => <line key={y} x1="31" x2="49" y1={y} y2={y} stroke="#2a2016" strokeWidth="1.4" />)}
+        </g>
+      )}
+      {model === 2 && (
+        <g>
+          <rect x="31" y="30" width="18" height="24" rx="3" fill={`url(#mg${model})`} />
+          <rect x="29" y="4" width="22" height="28" rx="11" fill={`url(#mesh${model})`} stroke="#8a8d92" />
+          <circle cx="40" cy="38" r="2" fill="#d9a441" />
+        </g>
+      )}
+    </svg>
+  );
+}
+
 function Mic(props: Props) {
   const { d, rig, edit } = props;
   const model = d.params.model;
   const models = def('mic').params[0].options!;
+  const cab = d.mic && rig.devices[d.mic.cab];
   return (
     <div className="mic">
-      <svg viewBox="0 0 60 90" aria-hidden className="mic-art">
-        <line x1="30" y1="40" x2="30" y2="86" className="stand" />
-        <path d="M 14 88 L 30 82 L 46 88" className="stand" />
-        {model === 0 && <g transform="rotate(-20 30 40)"><rect x="25" y="2" width="10" height="16" rx="4" className="mic-grille" /><path d="M 25.5 18 L 27 44 L 33 44 L 34.5 18 Z" className="mic-body" /></g>}
-        {model === 1 && <g><rect x="18" y="2" width="24" height="30" rx="11" className="mic-grille" /><rect x="26" y="32" width="8" height="12" className="mic-body" /></g>}
-        {model === 2 && <g><rect x="21" y="2" width="18" height="26" rx="9" className="mic-grille" /><rect x="22" y="27" width="16" height="17" rx="3" className="mic-body" /></g>}
-      </svg>
+      <MicArt model={model} />
+      <span className="mic-maker">{MAKER.mic}</span>
       <select className="mic-model nodrag" value={model} aria-label="Mic model" onChange={(e) => edit((r) => setParam(r, d.id, 'model', Number(e.target.value)))}>
         {models.map((m, i) => <option key={m} value={i}>{m}</option>)}
       </select>
       <MicControls d={d} edit={edit} look="pedal" />
-      <Tape>{tapeName(rig, d)}</Tape>
+      <span className="mic-where">{cab ? `on ${tapeName(rig, cab)}` : 'not on a cab'}</span>
+      <TapeIf rig={rig} d={d} />
     </div>
   );
 }
@@ -323,12 +423,16 @@ function DiBox(props: Props) {
   return (
     <div className="steelbox">
       <Screws />
+      <span className="steel-maker">{MAKER.input} DI</span>
       <div className="jack-art" aria-hidden />
       <select className="nodrag" value={d.params.channel} aria-label="Interface input" onChange={(e) => edit((r) => setParam(r, d.id, 'channel', Number(e.target.value)))}>
         {channel.options.map((o, i) => <option key={o} value={i}>{o}</option>)}
       </select>
       {knobs(props, 'pedal', (p) => p.name === 'trim')}
-      <Tape>{tapeName(rig, d) === 'Guitar Input' ? 'Guitar' : tapeName(rig, d)}</Tape>
+      <button className={`mute-switch nodrag${d.on ? '' : ' muted'}`} aria-pressed={!d.on} onClick={() => edit((r) => toggle(r, d.id))}>
+        <span className={`led${d.on ? '' : ' lit'}`} />mute
+      </button>
+      <TapeIf rig={rig} d={d} />
     </div>
   );
 }
@@ -337,12 +441,12 @@ function Interface(props: Props) {
   const vol = props.d.params.volume;
   return (
     <div className="interface">
-      <div className="interface-top"><span className="badge">RIG I/O</span><span className="dim-text">monitor</span></div>
+      <div className="interface-top"><span className="badge">{MAKER.output}</span><span className="dim-text">monitor</span></div>
       <div className="interface-body">
         <div className="combo-jacks" aria-hidden><span /><span /></div>
         <div className="monitor-knob" style={{ '--v': vol } as CSSProperties}>{knobs(props, 'amp')}</div>
       </div>
-      <Tape>{tapeName(props.rig, props.d) === 'Output' ? 'Interface' : tapeName(props.rig, props.d)}</Tape>
+      <TapeIf rig={props.rig} d={props.d} />
     </div>
   );
 }
@@ -351,8 +455,9 @@ function Brick({ d, rig }: Props) {
   return (
     <div className="brick">
       <span className="brick-led" />
+      <span className="brick-maker">{MAKER.power}</span>
       <span>9V DC · 8 isolated outputs</span>
-      <Tape className="side">{tapeName(rig, d)}</Tape>
+      <TapeIf rig={rig} d={d} className="side" />
     </div>
   );
 }
@@ -361,8 +466,10 @@ function SteelBox(props: Props) {
   return (
     <div className="steelbox small">
       <Screws />
-      {def(props.d.type).params.length > 0 && <div className="pedal-knobs">{knobs(props, 'pedal')}</div>}
-      <Tape>{tapeName(props.rig, props.d)}</Tape>
+      <span className="steel-maker">{MAKER[props.d.type]}</span>
+      <span className="steel-name">{deviceName(props.d)}</span>
+      {knobParams(props.d.type).length > 0 && <div className="pedal-knobs">{knobs(props, 'pedal')}</div>}
+      <TapeIf rig={props.rig} d={props.d} />
     </div>
   );
 }
@@ -381,4 +488,27 @@ export function Gear(props: Props) {
   }
 }
 
-export { PEDALS };
+// The gear list's picture of an item: a small drawing of the real thing, not a name.
+export function Thumb({ item }: { item: Item }) {
+  const params: Record<string, number> = item.model === undefined ? {} : { model: item.model };
+  switch (item.type) {
+    case 'amp': return <span className="thumb thumb-amp" aria-hidden><i /><i /></span>;
+    case 'cab': return <span className="thumb thumb-cab" aria-hidden><i /><i /><i /><i /></span>;
+    case 'mic': return <span className="thumb thumb-mic" aria-hidden><MicArt model={0} /></span>;
+    case 'power': return <span className="thumb thumb-brick" aria-hidden><i /></span>;
+    case 'wah': case 'volume': return <span className="thumb thumb-treadle" aria-hidden><i /></span>;
+    case 'input': case 'output': case 'splitter': case 'joiner':
+      return <span className={`thumb thumb-steel${item.type === 'output' ? ' dark' : ''}`} aria-hidden><i /><i /></span>;
+    default: {
+      const color = colorOf(item.type, params);
+      const n = Math.min(4, knobParams(item.type).filter((p) => !p.options).length);
+      return (
+        <span className={`thumb thumb-pedal${isLight(color) ? ' light' : ''}`} style={{ '--body': color } as CSSProperties} aria-hidden>
+          <span className="thumb-knobs">{Array.from({ length: n }, (_, i) => <i key={i} />)}</span>
+          <span className="thumb-plate" />
+          <span className="thumb-label" />
+        </span>
+      );
+    }
+  }
+}

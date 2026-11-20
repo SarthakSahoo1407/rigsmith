@@ -1,9 +1,11 @@
-// Rig: native audio engine (JUCE) + React UI in a web view. The UI owns the rig and sends it
+// Rigsmith: native audio engine (JUCE) + React UI in a web view. The UI owns the rig and sends it
 // compiled (src/rig.ts compile()) to the engine (Engine.h).
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "Engine.h"
+#include "RigFile.h"
+#include <mach/mach.h>
 
 using namespace juce;
 
@@ -32,7 +34,7 @@ public:
         web.goToURL (devUrl.isNotEmpty() ? devUrl : WebBrowserComponent::getResourceProviderRoot());
 
         startTimerHz (30);
-        setSize (900, 640);
+        setSize (1440, 900);
     }
 
     ~MainComponent() override
@@ -62,6 +64,12 @@ private:
                 l->command = cmd == "main" ? rig::Looper::Main : cmd == "stop" ? rig::Looper::Stop
                            : cmd == "undo" ? rig::Looper::Undo : cmd == "clear" ? rig::Looper::Clear : rig::Looper::None;
             }
+            complete ({});
+        })
+        // Standalone tuner: tuner (open, inputChannel). While open, live events carry "tuner": hz.
+        .withNativeFunction ("tuner", [this] (const Array<var>& a, auto complete) {
+            engine.tunerChannel = jmax (0, (int) a[1]);
+            engine.tuning = (bool) a[0];
             complete ({});
         })
         .withNativeFunction ("openAudioSettings", [this] (const Array<var>&, auto complete) { openAudioSettings(); complete ({}); })
@@ -105,24 +113,37 @@ private:
         return out;
     }
 
+    // Exported rigs are encrypted .rigsmith files (RigFile.h).
     void exportRig (const String& text, const String& name, WebBrowserComponent::NativeFunctionCompletion complete)
     {
-        const auto start = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile (File::createLegalFileName (name) + ".json");
-        chooser = std::make_unique<FileChooser> ("Export rig", start, "*.json");
+        const auto start = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile (File::createLegalFileName (name) + ".rigsmith");
+        chooser = std::make_unique<FileChooser> ("Export rig", start, "*.rigsmith");
         chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::warnAboutOverwriting,
                               [text, complete] (const FileChooser& fc) {
-                                  const auto f = fc.getResult();
-                                  complete (f != File() && f.replaceWithText (text));
+                                  auto f = fc.getResult();
+                                  if (f == File()) { complete (false); return; }
+                                  f = f.withFileExtension ("rigsmith");
+                                  const auto data = rigfile::seal (text);
+                                  complete (! data.isEmpty() && f.replaceWithData (data.getData(), data.getSize()));
                               });
     }
 
+    // Opens a .rigsmith file, or an older plain .json rig. Returns the JSON, or { error } when the
+    // file is damaged or isn't a rig, or null when the user cancels.
     void importRig (WebBrowserComponent::NativeFunctionCompletion complete)
     {
-        chooser = std::make_unique<FileChooser> ("Import rig", File::getSpecialLocation (File::userDocumentsDirectory), "*.json");
+        chooser = std::make_unique<FileChooser> ("Import rig", File::getSpecialLocation (File::userDocumentsDirectory), "*.rigsmith;*.json");
         chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [complete] (const FileChooser& fc) {
             const auto f = fc.getResult();
+            if (! f.existsAsFile()) { complete (var()); return; }
+            auto error = [&] (const String& why) { auto* o = new DynamicObject(); o->setProperty ("error", why); complete (var (o)); };
             // ponytail: 64 MB cap covers rigs with embedded IRs; stream it if rigs get bigger.
-            complete (f.existsAsFile() && f.getSize() < 64 * 1024 * 1024 ? var (f.loadFileAsString()) : var());
+            if (f.getSize() > 64 * 1024 * 1024) { error ("That file is too big to be a rig"); return; }
+            MemoryBlock data;
+            f.loadFileAsData (data);
+            if (! rigfile::isRigFile (data)) { complete (data.toString()); return; }
+            if (auto json = rigfile::open (data)) complete (*json);
+            else error ("That .rigsmith file is damaged or was changed outside Rigsmith");
         });
     }
 
@@ -155,6 +176,8 @@ private:
 
     void set (const String& key, const var& v)
     {
+        if (key == "mute")
+            engine.muted = (bool) v;
         if (key == "volume")
         {
             const double vol = jlimit (0.0, 1.0, (double) v);
@@ -187,24 +210,43 @@ private:
     {
         auto* o = new DynamicObject();
         o->setProperty ("peak", engine.peak.exchange (0.0f));
+        o->setProperty ("out", engine.outPeak.exchange (0.0f));
         o->setProperty ("cpu", deviceManager.getCpuUsage());
+        o->setProperty ("ram", memoryMb());
         web.emitEventIfBrowserIsVisible ("meter", var (o));
         engine.collectGarbage();
-        if (++ticks % 3 == 0)
+        if (++ticks % 3 == 0 || engine.tuning) // the tuner needle wants 30 updates a second
             web.emitEventIfBrowserIsVisible ("live", live());
     }
 
     int ticks = 0;
 
+    // What Activity Monitor shows as this app's memory (the audio engine; the web view runs in its own processes).
+    static double memoryMb()
+    {
+        task_vm_info_data_t info {};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        if (task_info (mach_task_self(), TASK_VM_INFO, (task_info_t) &info, &count) != KERN_SUCCESS) return 0;
+        return (double) info.phys_footprint / (1024.0 * 1024.0);
+    }
+
     // Tuner pitch and looper state, ten times a second: { deviceId: {hz} | {mode, length, position} }.
     var live()
     {
         auto* o = new DynamicObject();
+        if (engine.tuning)
+        {
+            auto* t = new DynamicObject();
+            t->setProperty ("hz", engine.tuner.detect());
+            o->setProperty ("__tuner", var (t));
+        }
         for (const auto& [id, node] : engine.nodes())
         {
             auto* d = new DynamicObject();
             if (auto* t = dynamic_cast<rig::Tuner*> (node.get()))
                 d->setProperty ("hz", t->on ? t->detect() : 0.0f);
+            else if (auto* g = dynamic_cast<rig::Gate*> (node.get()))
+                d->setProperty ("open", g->openOut.load());
             else if (auto* l = dynamic_cast<rig::Looper*> (node.get()))
             {
                 const auto sr = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() : 48000.0;
@@ -245,7 +287,7 @@ private:
 class RigApp : public JUCEApplication
 {
 public:
-    const String getApplicationName() override { return "Rig"; }
+    const String getApplicationName() override { return "Rigsmith"; }
     const String getApplicationVersion() override { return "0.1.0"; }
     void initialise (const String&) override { window = std::make_unique<Window>(); }
     void shutdown() override { window = nullptr; }
@@ -253,11 +295,12 @@ public:
 private:
     struct Window : DocumentWindow
     {
-        Window() : DocumentWindow ("Rig", Colours::black, allButtons)
+        Window() : DocumentWindow ("Rigsmith", Colours::black, allButtons)
         {
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent(), true);
             setResizable (true, true);
+            setResizeLimits (960, 600, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
         }

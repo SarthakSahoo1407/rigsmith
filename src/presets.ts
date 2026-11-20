@@ -3,23 +3,27 @@
 // same rig out left to right in signal order.
 
 import { def, type DeviceType } from './catalog';
-import { addDevice, connect, emptyRig, moveDevice, placeMic, setParam, type Rig, type XY } from './rig';
+import { addDevice, connect, emptyRig, mainJack as jackOf, moveDevice, placeMic, setParam, type Rig, type XY } from './rig';
+
+const mainJack = (type: DeviceType, dir: 'in' | 'out') => jackOf(type, dir)!;
 
 type Params = Record<string, number>;
+type Size = '1x12' | '2x12' | '4x12';
+type Speaker = 'warm 25W' | 'aggressive 60W' | 'chimey alnico' | 'sparkly US';
 type Kit = {
   input: () => string;
   pedal: (type: DeviceType, params?: Params, opts?: { off?: boolean; loop?: boolean }) => string;
   amp: (params: Params) => string;
-  cab: (size: '1x12' | '2x12' | '4x12') => string; // goes under the last amp added
+  cab: (size: Size, speaker?: Speaker) => string; // goes under the last amp added
   mic: (model: 'dynamic' | 'ribbon' | 'condenser', cab: string, position: number, distance: number) => string;
-  output: () => string;
+  output: (volume?: number) => string;
+  typeOf: (id: string) => DeviceType;
   wire: (from: string, fromJack: string, to: string, toJack: string) => void;
   chain: (...ids: string[]) => void; // out → in along the list, using each device's main jacks
   loop: (amp: string, ...fx: string[]) => void; // amp send → effects → amp return
+  toOutput: (from: string, output: string) => void; // stereo devices feed both sides
 };
 
-const OUT_JACK: Partial<Record<DeviceType, string>> = { amp: 'speaker', chorus: 'outL', delay: 'outL', reverb: 'outL', splitter: 'outA' };
-const IN_JACK: Partial<Record<DeviceType, string>> = { reverb: 'inL', joiner: 'inA', output: 'L' };
 
 function build(steps: (kit: Kit) => void): Rig {
   let rig = emptyRig();
@@ -45,26 +49,32 @@ function build(steps: (kit: Kit) => void): Rig {
       return id;
     },
     amp: (params) => add('amp', { x: 1000 * stacks++, y: 0 }, 0, params),
-    cab: (size) => add('cab', { x: 1000 * (stacks - 1), y: 0 }, 0, { size: choice('cab', 'size', size) }),
+    cab: (size, speaker = 'warm 25W') => add('cab', { x: 1000 * (stacks - 1), y: 0 }, 0, { size: choice('cab', 'size', size), speaker: choice('cab', 'speaker', speaker) }),
     mic: (model, cab, position, distance) => {
       const n = mics[cab] = (mics[cab] ?? -1) + 1;
       const id = add('mic', { x: n, y: 0 }, 1, { model: choice('mic', 'model', model) });
       rig = placeMic(rig, id, { cab, x: position, y: 0.5, distance });
       return id;
     },
-    output: () => add('output', { x: 0, y: 0 }),
+    output: (volume) => add('output', { x: 0, y: 0 }, 0, volume === undefined ? {} : { volume }),
+    typeOf: (id) => rig.devices[id].type,
     wire: (a, aj, b, bj) => { rig = connect(rig, { device: a, jack: aj }, { device: b, jack: bj }); },
     chain: (...ids) => {
       for (let i = 1; i < ids.length; i++) {
         const [a, b] = [rig.devices[ids[i - 1]], rig.devices[ids[i]]];
-        kit.wire(a.id, OUT_JACK[a.type] ?? 'out', b.id, IN_JACK[b.type] ?? 'in');
+        kit.wire(a.id, mainJack(a.type, 'out'), b.id, mainJack(b.type, 'in'));
       }
+    },
+    toOutput: (from, output) => {
+      const stereo = def(rig.devices[from].type).jacks.some((j) => j.name === 'outR');
+      kit.wire(from, stereo ? 'outL' : 'out', output, 'L');
+      if (stereo) kit.wire(from, 'outR', output, 'R');
     },
     loop: (amp, ...fx) => {
       const [first, last] = [rig.devices[fx[0]], rig.devices[fx[fx.length - 1]]];
-      kit.wire(amp, 'send', first.id, IN_JACK[first.type] ?? 'in');
+      kit.wire(amp, 'send', first.id, mainJack(first.type, 'in'));
       kit.chain(...fx);
-      kit.wire(last.id, OUT_JACK[last.type] ?? 'out', amp, 'return');
+      kit.wire(last.id, mainJack(last.type, 'out'), amp, 'return');
     },
   };
   steps(kit);
@@ -82,154 +92,238 @@ function build(steps: (kit: Kit) => void): Rig {
 export type Preset = { category: string; build: () => Rig };
 export const DEFAULT_PRESET = 'Clean amp';
 
-// Common shapes: guitar → pedals → amp → cab → mic(s) → interface, effects optionally in the amp loop.
+// Common shape: guitar → tuner → pedals → amp → cab → mic(s) → interface, effects optionally in
+// the amp's loop. With no amp the chain goes straight to the interface. Two mics on one cab blend
+// through a joiner to the centre, the way an engineer mixes them; panning them apart lopsides the sound.
+type Mic = ['dynamic' | 'ribbon' | 'condenser', number, number]; // model, position, distance
 type Shape = {
   pedals?: [DeviceType, Params?, { off?: boolean }?][];
   amp?: Params;
   loop?: [DeviceType, Params?][];
-  cab?: '1x12' | '2x12' | '4x12';
-  mics?: ['dynamic' | 'ribbon' | 'condenser', number, number][]; // model, position, distance; two mics pan L and R
+  cab?: [Size, Speaker];
+  mics?: Mic[];
+  level?: number; // interface volume, to even out preset loudness
 };
-const rigOf = ({ pedals = [], amp, loop = [], cab = '2x12', mics = [['dynamic', 0.3, 0.1]] }: Shape) => () => build((k) => {
+const rigOf = ({ pedals = [], amp, loop = [], cab = ['2x12', 'warm 25W'], mics = [['dynamic', 0.3, 0.1]], level }: Shape) => () => build((k) => {
   const i = k.input();
   const t = k.pedal('tuner');
   const chain = [i, t, ...pedals.map(([type, params, opts]) => k.pedal(type, params, opts))];
   const fx = loop.map(([type, params]) => k.pedal(type, params, { loop: true }));
-  const o = k.output();
-  if (!amp) { k.chain(...chain, o); return; }
-  const a = k.amp(amp), c = k.cab(cab);
+  const o = k.output(level);
+  if (!amp) {
+    k.chain(...chain);
+    k.toOutput(chain[chain.length - 1], o);
+    return;
+  }
+  const a = k.amp(amp), c = k.cab(...cab);
   k.chain(...chain, a, c);
   if (fx.length) k.loop(a, ...fx);
   const ms = mics.map(([model, x, d]) => k.mic(model, c, x, d));
-  if (ms.length === 1) k.wire(ms[0], 'out', o, 'L');
-  else { k.wire(ms[0], 'out', o, 'L'); k.wire(ms[1], 'out', o, 'R'); }
+  if (!ms[1]) return k.wire(ms[0], 'out', o, 'L');
+  const blend = k.pedal('joiner', { levelA: 1, levelB: 0.7 });
+  k.wire(ms[0], 'out', blend, 'inA');
+  k.wire(ms[1], 'out', blend, 'inB');
+  k.wire(blend, 'out', o, 'L');
 });
 
-const CLEAN = 0, CRUNCH = 1, HIGH = 2;
+// Two amps on a splitter, one per side of the stereo field: left amp → interface L, right → R.
+type Side = { amp: Params; cab: [Size, Speaker]; mic: Mic; pedals?: [DeviceType, Params?][]; loop?: [DeviceType, Params?][] };
+const dualOf = ({ pedals = [], left, right, level }: { pedals?: Shape['pedals']; left: Side; right: Side; level?: number }) => () => build((k) => {
+  const i = k.input(), t = k.pedal('tuner');
+  const pre = pedals.map(([type, params, opts]) => k.pedal(type, params, opts));
+  const sp = k.pedal('splitter');
+  k.chain(i, t, ...pre, sp);
+  const o = k.output(level);
+  for (const [jack, side, out] of [['outA', left, 'L'], ['outB', right, 'R']] as const) {
+    const fx = (side.pedals ?? []).map(([type, params]) => k.pedal(type, params));
+    const a = k.amp(side.amp), c = k.cab(...side.cab);
+    const first = fx[0] ?? a;
+    k.wire(sp, jack, first, mainJack(k.typeOf(first), 'in'));
+    k.chain(...fx, a, c);
+    const loop = (side.loop ?? []).map(([type, params]) => k.pedal(type, params, { loop: true }));
+    if (loop.length) k.loop(a, ...loop);
+    k.wire(k.mic(side.mic[0], c, side.mic[1], side.mic[2]), 'out', o, out);
+  }
+});
+
+// Amp models (src/catalog.ts AMP_MODELS) and effect models by name.
+const AMP = { usClean: 0, tweed: 1, chime: 2, plexi: 3, ukLead: 4, rectified: 5, modern: 6, boutique: 7, jazz: 8 };
+const amp = (model: keyof typeof AMP, gain: number, bass = 5, mid = 5, treble = 5, presence = 5, master = 5) =>
+  ({ model: AMP[model], gain, bass, mid, treble, presence, master });
+const OD = 0, DIST = 1, AIAB = 2, METAL = 3; // drive models
 const comp = (threshold: number, ratio: number, makeup: number, attack = 10, release = 120) => ({ threshold, ratio, attack, release, makeup });
-const verb = (decay: number, mix: number, tone = 6, predelay = 15) => ({ decay, predelay, tone, mix });
-const echo = (time: number, feedback: number, mix: number, tone = 5, pingpong = 0) => ({ time, feedback, tone, mix, pingpong });
+const REVERB = { room: 0, hall: 1, plate: 2, spring: 3 };
+const verb = (model: keyof typeof REVERB, decay: number, mix: number, tone = 6, predelay = 15) => ({ model: REVERB[model], decay, predelay, tone, mix });
+const DELAY = { digital: 0, tape: 1, analog: 2 };
+const echo = (model: keyof typeof DELAY, time: number, feedback: number, mix: number, tone = 5, pingpong = 0) => ({ model: DELAY[model], time, feedback, tone, mix, pingpong });
+const drive = (model: number, d: number, tone: number, level: number) => ({ model, drive: d, tone, level });
+const boostPedal = (d: number) => ['distortion', drive(OD, d, 6, 8)] as [DeviceType, Params]; // overdrive as a tight boost before high gain
+const gate = (threshold: number, release = 60): [DeviceType, Params] => ['gate', { threshold, release }];
 
 export const PRESETS: Record<string, Preset> = {
   // Clean
   [DEFAULT_PRESET]: { category: 'Clean', build: rigOf({
     pedals: [['compressor', comp(-24, 3, 4)]],
-    amp: { voicing: CLEAN, gain: 4, bass: 5, mid: 5, treble: 6, master: 5 },
-    loop: [['reverb', verb(2, 0.25)]],
+    amp: amp('usClean', 4, 5, 5, 6), loop: [['reverb', verb('spring', 2, 0.3)]],
+    cab: ['2x12', 'sparkly US'],
   }) },
   'Glassy chorus clean': { category: 'Clean', build: rigOf({
     pedals: [['compressor', comp(-26, 4, 6, 5)], ['chorus', { rate: 0.7, depth: 0.45, mix: 0.45 }]],
-    amp: { voicing: CLEAN, gain: 3, bass: 4, mid: 5, treble: 7, master: 5 },
-    loop: [['reverb', verb(2.4, 0.3, 7)]], cab: '1x12', mics: [['condenser', 0.35, 0.2]],
+    amp: amp('jazz', 5, 4, 5, 7, 6), loop: [['reverb', verb('plate', 2.4, 0.3, 7)]],
+    cab: ['2x12', 'sparkly US'], mics: [['condenser', 0.35, 0.2]],
   }) },
   'Jazz clean': { category: 'Clean', build: rigOf({
-    amp: { voicing: CLEAN, gain: 3, bass: 6, mid: 6, treble: 3, master: 5 },
-    loop: [['reverb', verb(1.4, 0.18, 4)]], cab: '1x12', mics: [['ribbon', 0.5, 0.35]],
+    amp: amp('jazz', 4, 6, 6, 3, 3), loop: [['reverb', verb('room', 1.2, 0.18, 4)]],
+    cab: ['1x12', 'warm 25W'], mics: [['ribbon', 0.5, 0.35]],
+  }) },
+  'Chime jangle': { category: 'Clean', build: rigOf({
+    pedals: [['compressor', comp(-24, 3, 4)]],
+    amp: amp('chime', 4, 4, 5, 7, 6), loop: [['reverb', verb('plate', 1.8, 0.25, 7)]],
+    cab: ['2x12', 'chimey alnico'],
+  }) },
+  'Electric 12-string': { category: 'Clean', build: rigOf({
+    pedals: [['compressor', comp(-26, 4, 5, 5)], ['pitch', { interval: 12, detune: 6, mix: 0.5 }]],
+    amp: amp('chime', 3, 4, 5, 7, 6), loop: [['reverb', verb('plate', 2, 0.25, 7)]],
+    cab: ['2x12', 'chimey alnico'], mics: [['condenser', 0.3, 0.2]],
   }) },
   'Country slapback': { category: 'Clean', build: rigOf({
     pedals: [['compressor', comp(-30, 6, 8, 2, 90)]],
-    amp: { voicing: CLEAN, gain: 4, bass: 4, mid: 6, treble: 8, master: 6 },
-    loop: [['delay', echo(110, 0.1, 0.35, 7)]], cab: '2x12', mics: [['dynamic', 0.2, 0.05]],
+    amp: amp('usClean', 5, 4, 6, 7, 7, 6), loop: [['delay', echo('tape', 110, 0.08, 0.35, 6)]],
+    cab: ['1x12', 'sparkly US'], mics: [['dynamic', 0.2, 0.05]],
   }) },
   'Funk clean': { category: 'Clean', build: rigOf({
-    pedals: [['compressor', comp(-30, 6, 9, 3, 80)], ['wah', { position: 0.6, q: 6 }], ['phaser', { rate: 0.4, depth: 0.6, feedback: 0.3, stages: 0 }]],
-    amp: { voicing: CLEAN, gain: 3, bass: 4, mid: 5, treble: 7, master: 5 }, cab: '1x12', mics: [['condenser', 0.4, 0.2]],
+    pedals: [['compressor', comp(-30, 6, 9, 3, 80)], ['wah', { position: 0.6, q: 6 }, { off: true }], ['phaser', { rate: 0.4, depth: 0.6, feedback: 0.3, stages: 0 }]],
+    amp: amp('usClean', 4, 4, 6, 7, 6, 7), cab: ['1x12', 'sparkly US'], mics: [['condenser', 0.4, 0.2]],
   }) },
   'Surf': { category: 'Clean', build: rigOf({
     pedals: [['tremolo', { rate: 6, depth: 0.5, shape: 0 }]],
-    amp: { voicing: CLEAN, gain: 5, bass: 4, mid: 5, treble: 7, master: 6 },
-    loop: [['reverb', verb(3.5, 0.55, 7, 5)]],
+    amp: amp('usClean', 5, 4, 5, 7, 6, 6), loop: [['reverb', verb('spring', 4, 0.6, 7, 5)]],
+    cab: ['2x12', 'sparkly US'],
   }) },
 
-  // Acoustic: no amp. A piezo-style DI chain straight to the interface: compression, an EQ that
-  // scoops the boxy mids and lifts the air, a touch of width and a room.
-  'Acoustic DI': { category: 'Acoustic', build: rigOf({
-    pedals: [
-      ['compressor', comp(-28, 3, 5, 15, 150)],
-      ['eq', { '100Hz': -4, '200Hz': 1, '400Hz': -5, '800Hz': -2, '1600Hz': 1, '3200Hz': 4, '6400Hz': 5, level: 0 }],
-      ['chorus', { rate: 0.3, depth: 0.15, mix: 0.2 }],
-      ['reverb', verb(1.8, 0.3, 7, 20)],
-    ],
+  // Acoustic: no amp. The acoustic sim turns the pickup into a guitar body, straight to the interface.
+  'Acoustic dreadnought': { category: 'Acoustic', build: rigOf({
+    pedals: [['compressor', comp(-26, 3, 4, 15, 150)], ['acoustic', { body: 0, mix: 0.75, top: 5, level: 5 }], ['reverb', verb('room', 1.4, 0.22, 6, 10)]],
   }) },
+  'Acoustic nylon': { category: 'Acoustic', build: rigOf({
+    pedals: [['compressor', comp(-24, 2.5, 3, 20, 180)], ['acoustic', { body: 3, mix: 0.8, top: 3, level: 5 }], ['reverb', verb('hall', 2.2, 0.25, 4, 20)]],
+  }) },
+  // Octave strings first, then the body, so both sets of strings ring through the same guitar.
   'Acoustic 12-string': { category: 'Acoustic', build: rigOf({
     pedals: [
-      ['compressor', comp(-28, 3, 5, 15, 150)],
-      ['octave', { dry: 1, sub: 0, up: 0.35 }],
-      ['eq', { '100Hz': -5, '200Hz': 0, '400Hz': -5, '800Hz': -1, '1600Hz': 2, '3200Hz': 4, '6400Hz': 6, level: 0 }],
-      ['chorus', { rate: 0.6, depth: 0.25, mix: 0.35 }],
-      ['reverb', verb(2.2, 0.3, 7, 20)],
+      ['compressor', comp(-26, 3, 4, 15, 150)],
+      ['pitch', { interval: 12, detune: 5, mix: 0.55 }],
+      ['acoustic', { body: 1, mix: 0.7, top: 6, level: 5 }],
+      ['reverb', verb('plate', 1.8, 0.25, 7, 15)],
     ],
   }) },
 
-  // Crunch and rock
+  // Crunch
   'Blues crunch': { category: 'Crunch', build: rigOf({
-    pedals: [['compressor', comp(-22, 2.5, 3, 15, 150)], ['distortion', { drive: 3, tone: 6, level: 7 }]],
-    amp: { voicing: CRUNCH, gain: 4, bass: 5, mid: 6, treble: 6, master: 6 },
-    loop: [['delay', echo(320, 0.2, 0.2)], ['reverb', verb(1.6, 0.2, 5, 10)]], mics: [['ribbon', 0.5, 0.3]],
+    amp: amp('tweed', 7, 6, 6, 5, 5, 6), loop: [['reverb', verb('spring', 1.6, 0.2, 5)]],
+    cab: ['2x12', 'warm 25W'], mics: [['ribbon', 0.4, 0.25]],
   }) },
   'Classic rock': { category: 'Crunch', build: rigOf({
-    pedals: [['wah', { position: 0.5, q: 5 }, { off: true }], ['distortion', { drive: 6, tone: 5, level: 6 }]],
-    amp: { voicing: CRUNCH, gain: 6, bass: 6, mid: 6, treble: 6, master: 6 },
-    loop: [['delay', echo(380, 0.25, 0.25)]], cab: '4x12',
+    pedals: [['wah', { position: 0.5, q: 5 }, { off: true }]],
+    amp: amp('plexi', 8, 6, 6, 6, 5, 7), loop: [['delay', echo('analog', 380, 0.25, 0.22)]],
+    cab: ['4x12', 'warm 25W'],
+  }) },
+  'Indie crunch': { category: 'Crunch', build: rigOf({
+    pedals: [['boost', { model: 1, gain: 9, tone: 4 }]],
+    amp: amp('chime', 7, 4, 6, 6, 6), loop: [['reverb', verb('plate', 1.6, 0.2, 6)]],
+    cab: ['2x12', 'chimey alnico'],
+  }) },
+
+  'Clean and crunch': { category: 'Crunch', build: dualOf({
+    pedals: [['compressor', comp(-24, 3, 3)]],
+    left: { amp: amp('usClean', 4, 5, 5, 6, 5, 6.5), cab: ['2x12', 'sparkly US'], mic: ['condenser', 0.35, 0.2] },
+    right: { amp: amp('plexi', 7, 6, 6, 6, 5, 6), cab: ['4x12', 'warm 25W'], mic: ['dynamic', 0.3, 0.1] },
   }) },
 
   // Lead
   'Singing lead': { category: 'Lead', build: rigOf({
-    pedals: [['compressor', comp(-20, 3, 3, 20, 200)], ['distortion', { drive: 4, tone: 6, level: 7 }]],
-    amp: { voicing: HIGH, gain: 6, bass: 5, mid: 7, treble: 6, master: 6 },
-    loop: [['delay', echo(420, 0.35, 0.3, 5, 1)], ['reverb', verb(2.5, 0.25)]], cab: '4x12',
+    pedals: [['compressor', comp(-20, 3, 3, 20, 200)]],
+    amp: amp('boutique', 7, 5, 6, 5, 5, 6),
+    loop: [['delay', echo('tape', 420, 0.35, 0.3)], ['reverb', verb('hall', 2.5, 0.2)]],
+    cab: ['2x12', 'warm 25W'], mics: [['dynamic', 0.3, 0.1], ['ribbon', 0.5, 0.3]],
   }) },
   'Blues lead': { category: 'Lead', build: rigOf({
-    pedals: [['distortion', { drive: 5, tone: 6, level: 7 }]],
-    amp: { voicing: CRUNCH, gain: 6, bass: 5, mid: 7, treble: 6, master: 7 },
-    loop: [['delay', echo(350, 0.2, 0.22)], ['reverb', verb(1.8, 0.2, 5, 10)]], mics: [['ribbon', 0.4, 0.2]],
+    pedals: [['distortion', drive(OD, 5, 6, 6)]],
+    amp: amp('tweed', 8, 5, 6, 5, 5, 6),
+    loop: [['delay', echo('analog', 350, 0.2, 0.2)], ['reverb', verb('spring', 1.8, 0.2, 5)]],
+    cab: ['1x12', 'warm 25W'], mics: [['ribbon', 0.4, 0.2]],
+  }) },
+  'Rock lead': { category: 'Lead', build: rigOf({
+    pedals: [boostPedal(1)],
+    amp: amp('ukLead', 6, 5, 7, 6, 6, 6),
+    loop: [['delay', echo('digital', 380, 0.3, 0.22, 6)], ['reverb', verb('hall', 2, 0.15)]],
+    cab: ['4x12', 'warm 25W'],
   }) },
   'Shred lead': { category: 'Lead', build: rigOf({
-    pedals: [['gate', { threshold: -55, release: 60 }], ['distortion', { drive: 1, tone: 7, level: 8 }]],
-    amp: { voicing: HIGH, gain: 8, bass: 5, mid: 6, treble: 7, master: 5 },
-    loop: [['delay', echo(380, 0.3, 0.25, 5, 1)]], cab: '4x12', mics: [['dynamic', 0.2, 0.05], ['ribbon', 0.6, 0.3]],
+    pedals: [gate(-50, 80), boostPedal(0)],
+    amp: amp('modern', 6, 5, 6, 6, 6, 5),
+    loop: [['delay', echo('digital', 380, 0.3, 0.2, 6)]],
+    cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.25, 0.05], ['ribbon', 0.5, 0.3]],
+  }) },
+  // Two lead amps with their own delays, set to different times so the repeats bounce side to side.
+  'Stereo lead': { category: 'Lead', build: dualOf({
+    pedals: [boostPedal(2)],
+    left: { amp: amp('boutique', 7, 5, 6, 5, 5, 6), cab: ['2x12', 'warm 25W'], mic: ['dynamic', 0.3, 0.1], loop: [['delay', echo('tape', 380, 0.3, 0.25)]] },
+    right: { amp: amp('ukLead', 6, 5, 7, 6, 5, 6), cab: ['4x12', 'warm 25W'], mic: ['dynamic', 0.3, 0.1], loop: [['delay', echo('digital', 510, 0.3, 0.25, 6)]] },
   }) },
   'Octave fuzz lead': { category: 'Lead', build: rigOf({
-    pedals: [['octave', { dry: 1, sub: 0, up: 0.7 }], ['fuzz', { fuzz: 8, tone: 6, level: 6 }]],
-    amp: { voicing: CLEAN, gain: 5, bass: 5, mid: 6, treble: 5, master: 7 },
-    loop: [['delay', echo(300, 0.3, 0.3, 6)]], cab: '4x12',
+    pedals: [['octave', { dry: 1, sub: 0, up: 0.6 }], ['fuzz', { model: 0, fuzz: 7, tone: 6, level: 6 }]],
+    amp: amp('plexi', 4, 5, 6, 5, 5, 7), loop: [['delay', echo('analog', 300, 0.3, 0.25)]],
+    cab: ['4x12', 'warm 25W'],
   }) },
 
-  // Metal: a gate kills hiss before the amp, a drive with no gain tightens the low end, two mics pan L/R.
+  // Metal: a gate before the amp kills hiss, an overdrive with no gain tightens the low end.
   'Modern metal': { category: 'Metal', build: rigOf({
-    pedals: [['gate', { threshold: -55, release: 60 }], ['distortion', { drive: 0, tone: 7, level: 8 }]],
-    amp: { voicing: HIGH, gain: 7, bass: 6, mid: 4, treble: 6, master: 5 },
-    loop: [['eq', { '100Hz': 2, '400Hz': -3, '800Hz': -1, '1600Hz': 1, '3200Hz': 2 }]],
-    cab: '4x12', mics: [['dynamic', 0.2, 0.05], ['ribbon', 0.6, 0.3]],
+    pedals: [gate(-45), boostPedal(0)],
+    amp: amp('modern', 6, 5, 5, 5, 5, 5),
+    loop: [['eq', { '100Hz': 1, '400Hz': -2, '3200Hz': 1 }]],
+    cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.2, 0.05], ['dynamic', 0.5, 0.15]],
+  }) },
+  'Rectified chug': { category: 'Metal', build: rigOf({
+    pedals: [gate(-45), boostPedal(0)],
+    amp: amp('rectified', 6, 5, 6, 5, 5, 5),
+    cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.25, 0.05], ['condenser', 0.4, 0.3]],
   }) },
   'Djent': { category: 'Metal', build: rigOf({
-    pedals: [['gate', { threshold: -50, release: 40 }], ['distortion', { drive: 0, tone: 8, level: 9 }]],
-    amp: { voicing: HIGH, gain: 6, bass: 5, mid: 7, treble: 7, master: 5 },
-    loop: [['eq', { '100Hz': -2, '200Hz': -3, '800Hz': 3, '1600Hz': 3, '6400Hz': -2 }]],
-    cab: '4x12', mics: [['dynamic', 0.15, 0.03], ['dynamic', 0.45, 0.1]],
+    pedals: [gate(-45, 40), ['distortion', drive(OD, 0, 6, 9)]],
+    amp: amp('modern', 5, 5, 7, 6, 7, 5),
+    loop: [['eq', { '100Hz': -2, '200Hz': -2, '800Hz': 2, '1600Hz': 2 }]],
+    cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.15, 0.03], ['dynamic', 0.45, 0.1]],
   }) },
   'Thrash': { category: 'Metal', build: rigOf({
-    pedals: [['gate', { threshold: -52, release: 50 }], ['distortion', { drive: 2, tone: 7, level: 7 }]],
-    amp: { voicing: HIGH, gain: 8, bass: 7, mid: 3, treble: 7, master: 6 },
-    cab: '4x12', mics: [['dynamic', 0.25, 0.05]],
+    pedals: [gate(-45, 50), boostPedal(1)],
+    amp: amp('ukLead', 8, 6, 4, 6, 5, 6),
+    cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.25, 0.05]],
   }) },
   'Doom': { category: 'Metal', build: rigOf({
-    pedals: [['octave', { dry: 1, sub: 0.5, up: 0 }], ['fuzz', { fuzz: 9, tone: 4, level: 7 }]],
-    amp: { voicing: CRUNCH, gain: 8, bass: 8, mid: 5, treble: 4, master: 8 },
-    loop: [['reverb', verb(3, 0.2, 4)]], cab: '4x12', mics: [['ribbon', 0.4, 0.2]],
+    pedals: [['fuzz', { model: 1, fuzz: 6, tone: 7, level: 4 }]],
+    amp: amp('rectified', 4, 5, 6, 6, 5, 5), loop: [['reverb', verb('room', 2, 0.15, 4)]],
+    cab: ['4x12', 'warm 25W'], mics: [['ribbon', 0.4, 0.2]],
+  }) },
+
+  // Two rectified/modern stacks, one per side: the double-tracked wall of a metal record.
+  'Twin stack metal': { category: 'Metal', build: dualOf({
+    pedals: [gate(-45), boostPedal(0)],
+    left: { amp: amp('rectified', 6, 5, 6, 5, 5, 5), cab: ['4x12', 'aggressive 60W'], mic: ['dynamic', 0.25, 0.05] },
+    right: { amp: amp('modern', 6, 5, 5, 5, 5, 5), cab: ['4x12', 'aggressive 60W'], mic: ['dynamic', 0.3, 0.05] },
   }) },
 
   // Ambient and utility
-  // Volume-pedal swells into chorus; the stereo ping-pong delay and long reverb sit after the mic,
+  // Volume-pedal swells into chorus; the stereo tape delay and long hall sit after the mic,
   // studio style, so they stay stereo all the way to the interface.
   'Ambient swells': { category: 'Ambient', build: () => build((k) => {
     const i = k.input(), t = k.pedal('tuner');
     const v = k.pedal('volume', { position: 0.9 });
     const ch = k.pedal('chorus', { rate: 0.5, depth: 0.5, mix: 0.4 });
-    const dl = k.pedal('delay', echo(450, 0.5, 0.45, 5, 1));
-    const rv = k.pedal('reverb', verb(6, 0.7, 5, 40));
-    const a = k.amp({ voicing: CLEAN, gain: 4, bass: 5, mid: 5, treble: 6, master: 5 });
-    const cab = k.cab('2x12'), m = k.mic('condenser', cab, 0.4, 0.25);
+    const dl = k.pedal('delay', echo('tape', 450, 0.5, 0.45, 5, 1));
+    const rv = k.pedal('reverb', verb('hall', 6, 0.7, 5, 40));
+    const a = k.amp(amp('usClean', 4, 5, 5, 6));
+    const cab = k.cab('2x12', 'sparkly US'), m = k.mic('condenser', cab, 0.4, 0.25);
     const o = k.output();
     k.chain(i, t, v, ch, a, cab);
     k.chain(m, dl);
@@ -238,27 +332,17 @@ export const PRESETS: Record<string, Preset> = {
     k.wire(rv, 'outL', o, 'L');
     k.wire(rv, 'outR', o, 'R');
   }) },
-  // A splitter feeds a driven crunch amp (left) and a clean amp (right) in parallel.
-  'Dual amp stereo': { category: 'Ambient', build: () => build((k) => {
-    const i = k.input(), t = k.pedal('tuner'), sp = k.pedal('splitter');
-    const d = k.pedal('distortion', { drive: 6, tone: 5, level: 5 });
-    const dirty = k.amp({ voicing: CRUNCH, gain: 6, master: 5 }), cabL = k.cab('4x12');
-    const clean = k.amp({ voicing: CLEAN, gain: 4, master: 5 }), cabR = k.cab('2x12');
-    const micL = k.mic('dynamic', cabL, 0.3, 0.1), micR = k.mic('condenser', cabR, 0.4, 0.2), o = k.output();
-    k.chain(i, t, sp);
-    k.wire(sp, 'outA', d, 'in');
-    k.chain(d, dirty, cabL);
-    k.wire(sp, 'outB', clean, 'in');
-    k.chain(clean, cabR);
-    k.wire(micL, 'out', o, 'L');
-    k.wire(micR, 'out', o, 'R');
+  // Two amps on a splitter, panned apart: a driven Plexi left, a US clean right.
+  'Dual amp stereo': { category: 'Ambient', build: dualOf({
+    left: { pedals: [['distortion', drive(OD, 3, 6, 7)]], amp: amp('plexi', 6), cab: ['4x12', 'warm 25W'], mic: ['dynamic', 0.3, 0.1] },
+    right: { amp: amp('usClean', 4, 5, 5, 6, 5, 5.3), cab: ['2x12', 'sparkly US'], mic: ['condenser', 0.4, 0.2] },
   }) },
   // The looper sits after the mic, so loops capture the finished tone.
   'Looper jam': { category: 'Ambient', build: () => build((k) => {
     const i = k.input(), t = k.pedal('tuner');
-    const d = k.pedal('distortion', { drive: 4, tone: 6, level: 6 });
+    const d = k.pedal('distortion', drive(OD, 4, 6, 6));
     const lp = k.pedal('looper', { level: 1 });
-    const a = k.amp({ voicing: CRUNCH, gain: 5, bass: 5, mid: 6, treble: 6, master: 6 });
+    const a = k.amp(amp('plexi', 5, 5, 6, 6));
     const cab = k.cab('2x12'), m = k.mic('dynamic', cab, 0.3, 0.1), o = k.output();
     k.chain(i, t, d, a, cab);
     k.chain(m, lp, o);

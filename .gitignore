@@ -3,3 +3,5 @@
 node_modules/
 dist/
 native/build/
+renders/
+.DS_Store

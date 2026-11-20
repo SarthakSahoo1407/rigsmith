@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DeviceType } from './catalog';
 import {
-  addDevice, canConnect, commit, compile, connect, emptyRig, history, isPowered, parseRig,
-  placeMic, redo, removeDevice, setParam, undo, type Rig,
+  addDevice, canConnect, commit, compile, connect, emptyRig, history, insertIntoCable, isPowered, parseRig,
+  placeMic, powerUp, redo, removeDevice, replaceDevice, setParam, undo, type Rig,
 } from './rig';
 
 const at = { x: 0, y: 0 };
@@ -67,6 +67,14 @@ describe('cables', () => {
 });
 
 describe('power', () => {
+  it('powerUp uses a free outlet, then adds a supply when all are taken', () => {
+    let [rig, ids] = build('power', ...Array(9).fill('boost') as DeviceType[]);
+    for (const id of ids.slice(1)) rig = powerUp(rig, id);
+    expect(ids.slice(1).every((id) => isPowered(rig, id))).toBe(true);
+    expect(Object.keys(rig.devices).filter((d) => d.startsWith('power'))).toEqual(['power-1', 'power-2']);
+    expect(powerUp(rig, 'boost-1')).toBe(rig);
+  });
+
   it('pedals need a power cable; passive and wall gear do not', () => {
     let [rig] = build('distortion', 'power', 'amp', 'volume');
     expect(isPowered(rig, 'distortion-1')).toBe(false);
@@ -139,12 +147,36 @@ describe('editing', () => {
     expect(rig.devices['mic-1'].mic).toBeUndefined();
   });
 
+  it('drops a pedal into a cable, and refuses gear that cannot go there', () => {
+    let [rig] = build('input', 'output', 'distortion', 'amp');
+    rig = connect(rig, j('input-1', 'out'), j('output-1', 'L'));
+    rig = insertIntoCable(rig, rig.cables[0].id, 'distortion-1');
+    expect(rig.cables.map((c) => c.id).sort()).toEqual(['distortion-1.out>output-1.L', 'input-1.out>distortion-1.in']);
+    expect(() => insertIntoCable(rig, rig.cables[0].id, 'amp-1')).toThrow(); // its main output is a speaker jack
+  });
+
+  it('replaces a device in place, moving its cables to the matching jacks', () => {
+    let [rig] = build('input', 'delay', 'reverb', 'power');
+    rig = connect(rig, j('input-1', 'out'), j('delay-1', 'in'));
+    rig = connect(rig, j('delay-1', 'outL'), j('reverb-1', 'inL'));
+    rig = connect(rig, j('delay-1', 'outR'), j('reverb-1', 'inR'));
+    rig = connect(rig, j('power-1', '1'), j('delay-1', 'dc'));
+    let id: string;
+    [rig, id] = replaceDevice(rig, 'delay-1', 'distortion', { model: 3 });
+    expect(rig.devices['delay-1']).toBeUndefined();
+    expect(rig.devices[id].params.model).toBe(3);
+    // mono pedal: in and the left output move over, the right output has nowhere to go
+    expect(rig.cables.map((c) => c.id).sort()).toEqual([`${id}.out>reverb-1.inL`, `input-1.out>${id}.in`, `power-1.1>${id}.dc`]);
+    // same type: only the model changes, the id stays
+    expect(replaceDevice(rig, id, 'distortion', { model: 0 })[1]).toBe(id);
+  });
+
   it('clamps params and rounds choices', () => {
     let [rig] = build('amp');
     rig = setParam(rig, 'amp-1', 'gain', 99);
-    rig = setParam(rig, 'amp-1', 'voicing', 1.6);
+    rig = setParam(rig, 'amp-1', 'model', 1.6);
     rig = setParam(rig, 'amp-1', 'nope', 1);
-    expect(rig.devices['amp-1'].params).toMatchObject({ gain: 10, voicing: 2 });
+    expect(rig.devices['amp-1'].params).toMatchObject({ gain: 10, model: 2 });
     expect(rig.devices['amp-1'].params).not.toHaveProperty('nope');
   });
 
@@ -188,8 +220,8 @@ describe('rig files', () => {
   });
 
   it('fills missing params with defaults and clamps bad ones', () => {
-    const rig = parseRig(JSON.stringify({ version: 1, cables: [], devices: { b: { id: 'b', type: 'boost', params: { gain: 1e9, treble: 'x' } } } }));
-    expect(rig.devices.b.params).toEqual({ gain: 24, treble: 0 });
+    const rig = parseRig(JSON.stringify({ version: 1, cables: [], devices: { b: { id: 'b', type: 'boost', params: { gain: 1e9, tone: 'x', model: 7 } } } }));
+    expect(rig.devices.b.params).toEqual({ model: 2, gain: 24, tone: 5 });
   });
 });
 
@@ -225,22 +257,43 @@ describe('board layout', async () => {
   });
 
   it('keeps signal order right to left on the board', async () => {
-    const rig = PRESETS['Blues crunch'].build();
+    const rig = PRESETS['Shred lead'].build();
     const { pos } = layoutBoard(rig);
-    expect(pos['tuner-1'].x).toBeGreaterThan(pos['compressor-1'].x);
-    expect(pos['compressor-1'].x).toBeGreaterThan(pos['distortion-1'].x);
+    expect(pos['tuner-1'].x).toBeGreaterThan(pos['gate-1'].x);
+    expect(pos['gate-1'].x).toBeGreaterThan(pos['distortion-1'].x);
   });
 
   it('a dropped pedal takes the slot it was dropped on', async () => {
     const { dropHints } = await import('./layout');
     const { moveDevice } = await import('./rig');
-    let rig = PRESETS['Blues crunch'].build();
+    let rig = PRESETS['Shred lead'].build();
     const layout = layoutBoard(rig);
     // Drop the tuner just left of the distortion.
     const at = { x: layout.pos['distortion-1'].x - 60, y: layout.pos['distortion-1'].y };
     for (const [id, hint] of Object.entries(dropHints(rig, layout, 'tuner-1', at))) rig = moveDevice(rig, id, 'board', hint);
     const after = layoutBoard(rig).pos;
     expect(after['tuner-1'].x).toBeLessThan(after['distortion-1'].x);
-    expect(after['compressor-1'].x).toBeGreaterThan(after['distortion-1'].x);
+    expect(after['gate-1'].x).toBeGreaterThan(after['distortion-1'].x);
+  });
+});
+
+describe('grid layout', async () => {
+  const { PRESETS } = await import('./presets');
+  const { layoutGrid } = await import('./layout');
+  it.each(Object.keys(PRESETS))('%s: signal flows left to right, no two tiles share a cell', (name) => {
+    const rig = PRESETS[name].build();
+    const pos = layoutGrid(rig);
+    const cells = Object.values(pos).map((p) => `${p.x}:${p.y}`);
+    expect(new Set(cells).size).toBe(cells.length);
+    expect(Object.keys(pos).some((id) => id.startsWith('power'))).toBe(false);
+    for (const c of rig.cables) {
+      if (!pos[c.from.device] || !pos[c.to.device] || c.to.jack === 'return') continue;
+      expect(pos[c.to.device].x, `${c.id}`).toBeGreaterThan(pos[c.from.device].x);
+    }
+  });
+
+  it('a splitter opens a second row', () => {
+    const pos = layoutGrid(PRESETS['Dual amp stereo'].build());
+    expect(pos['amp-1'].y).not.toBe(pos['amp-2'].y);
   });
 });

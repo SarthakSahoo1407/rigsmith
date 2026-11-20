@@ -1,4 +1,4 @@
-# Guitar Rig Simulator — Plan
+# Rigsmith — Guitar Rig Simulator Plan
 
 A desktop guitar rig (macOS) you build like a real one: place any number of pedals, amps, cabs, mics and power supplies, run audio and power cables between jacks in any order, split and rejoin the signal, and play through it live from an audio interface.
 
@@ -10,16 +10,25 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 | Audio | JUCE `AudioDeviceManager` + a small node graph of our own (`native/Engine.h`). Built-in `juce_dsp` pieces first (IIR filters, WaveShaper, Convolution, Compressor, DelayLine, Oscillator); plain C++ processors where none exists (noise gate, octave, looper). |
 | Guitar input | Audio interface, chosen in JUCE's Audio Settings dialog (device, sample rate, buffer size, enabled channels). No MIDI. |
 | Monitoring | Wired headphones/monitors on the interface. Bluetooth is too slow for live playing. |
-| Amp realism | Built-in nodes now (WaveShaper + tone stack + cab filters). NAM neural captures later, swapped inside the amp device only. |
+| Amp realism | Nine amp models (US Clean, Tweed, UK Chime, UK Plexi, UK Lead, US Rectified, Modern High Gain, Boutique Lead, Jazz Clean): 1–4 gain stages at 8x oversampling with interstage filtering, a voiced tone stack, and a power section with sag, depth and presence. Cabs have a size and a speaker type. Drives, fuzz, boost, delay and reverb have models too. Cabs and the acoustic simulator are generated minimum-phase impulse responses (`designIr`: a magnitude curve plus seeded cone/wood ripple), so they sound measured rather than EQ'd. Tuned against FFT octave-band balance (`RigRender`), level-matched; retune from a real DI clip when one is available. NAM captures later. |
+| Branding | Fictional makers per kind of gear: Halvorsen (amps, cabs), Kestrel (pedals), Oriel (mics), Voltline (power), Arcadia Audio (interface, DI), Patchwell (splitter, joiner); the board is a Rigsmith Touring 32. Real brand names are never used. |
+| Pedals | Compact-stompbox look: glossy enclosure, controls and check light up top, a hinged plate that is the switch, maker label strip. Pedals that are several pedals in real life (drive, fuzz, boost, delay, reverb) are listed and drawn as separate pedals; the model stays a knob value. |
 | Power | On/off only. Unpowered pedal = silent. Devices store volts/mA but nothing checks them yet. |
 | UI | One rig, two views with a toggle. **Board**: a stage at soundcheck with auto zones (`src/layout.ts`): amp heads stacked on their cabs with mics in front on the stage, pedals in slots on a pedalboard (signal right to left, wrapping rows, power bricks on the rail), interface on a desk, guitar input beside the board. Drag reorders within a zone; nothing floats. **Grid**: free-form boxes. Built on React Flow (`@xyflow/react`). Graphite chrome, one amber accent, gaffer-tape name labels. |
+| Grid | Quad Cortex-style: equal tiles laid out by signal flow (columns) and branches (rows), routed cables, power gear hidden. The right panel shows the rig overview (levels, warnings, power all, the signal path with on/off per block) or the selected tile's controls. |
+| Stereo | Two mics on one cab blend to the centre through a joiner. Two amps on a splitter pan left and right, level-matched. |
 | Stereo | Every cable is mono. Stereo gear has separate L/R jacks. A mono signal into only Output L plays on both sides. |
 | Cables | Ideal (no tone loss). 5 ms fade on connect/disconnect, so no pops. |
-| Footswitches | Click, or an assignable keyboard hotkey (1–9, Space for looper). |
+| Footswitches | Click the plate, or keys 1–9 stomp pedals in signal order. |
+| Keys | ←/→ presets, V view, T tuner, M mute output, I mute input, B bypass, P power, Enter open, ⌫ delete, \\ gear list, ⌘Z/⇧⌘Z, ⌘S, ⌘O/⌘E, ? list. |
+| Gear list | Left sidebar, collapsible: thumbnails of the real gear. Click to add, drag onto the rig, or drop onto a cable to insert it there. Double-click any device for a large window with every control, Replace (same kind of gear) and Delete. |
+| Tuner | A tuner pedal in the chain, plus a standalone tuner (top bar, T) that listens to the input directly and mutes the output while open. |
+| Mute | Master output mute (top bar, M) and an input mute on each DI box (I mutes all). |
+| Meters | Input and output peak meters, clip light, latency, audio CPU and app RAM. |
 | Wah / volume | On-screen treadle (drag or scroll wheel). |
 | Undo | Cmd+Z / Shift+Cmd+Z over rig snapshots. A knob drag is one step. |
-| Saving | Autosave and named presets as JSON files in `~/Library/Application Support/Rig`, written by the native side; JSON export/import. Audio device settings saved the same way. |
-| Build | `npm run build` (UI → `dist/`), then `cmake --build native/build` copies `dist/` into `Rig.app`. Dev: `RIG_DEV_URL=http://localhost:5173` makes the app load the Vite dev server for hot reload. |
+| Saving | Autosave and named presets as JSON files in `~/Library/Application Support/Rig`, written by the native side. Export/import uses encrypted `.rigsmith` files (`native/RigFile.h`: AES-256-CBC + HMAC-SHA256, app-held key; tampered files are refused); old `.json` rigs still import. Audio device settings saved the same way. |
+| Build | `npm run build` (UI → `dist/`), then `cmake --build native/build` copies `dist/` into `Rigsmith.app`. Dev: `RIG_DEV_URL=http://localhost:5173` makes the app load the Vite dev server for hot reload. |
 
 ## Routing rules
 
@@ -122,11 +131,15 @@ src/layout.ts       Board zones and slot placement, drag-to-reorder hints
 src/gear.tsx        Board look: stompboxes, treadles, amp head, cabs, mics, interface, power brick
 src/app.css         all styles
 native/CMakeLists.txt  fetches JUCE 8.0.15, builds Rig.app, bundles dist/
-native/Main.cpp     app, window, bridge, settings, rig storage
+native/Main.cpp     app, window, bridge, settings, rig storage, meters, standalone tuner
+native/RigFile.h    encrypted .rigsmith export format
+native/icon.png     app icon (drawn in native/art/icon.svg)
 native/Dsp.h        biquad, oversampled shaper, delay line, LFO, envelope, Node base
 native/Devices.h    one sound model per device type
 native/Engine.h     graph build, handover to the audio thread
 native/check.cpp    offline engine check (RigCheck)
+native/render.cpp   RigRender: a guitar part (synthesised or a DI .wav) through a compiled rig into a WAV, with tone balance
+scripts/render-presets.mts  `npm run render [di.wav]`: every preset to renders/*.wav
 src/presets.ts      built-in rigs
 ```
 

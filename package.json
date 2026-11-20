@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run --dir src"
+    "test": "vitest run --dir src",
+    "render": "node --experimental-strip-types --no-warnings --import ./scripts/ts-resolve.mjs scripts/render-presets.mts"
   },
   "dependencies": {
     "@xyflow/react": "^13.0.2",

@@ -27,7 +27,13 @@ class Engine : public AudioIODeviceCallback
 {
 public:
     std::atomic<float> masterTarget { 0.5f };
-    std::atomic<float> peak { 0.0f }; // input level, read and reset by the UI meter
+    std::atomic<float> peak { 0.0f };    // input level, read and reset by the UI meter
+    std::atomic<float> outPeak { 0.0f }; // output level before the safety clipper, same
+    std::atomic<bool> muted { false };   // master mute: the rig keeps running, nothing reaches the speakers
+    // Standalone tuner: hears an interface input directly, whatever the rig, and mutes the output while open.
+    std::atomic<bool> tuning { false };
+    std::atomic<int> tunerChannel { 0 };
+    Tuner tuner;
 
     // Message thread. `compiled` is { nodes: [{id, type, params: [], on}], wires: [{from, out, to, in}] }.
     void setRig (const var& compiled)
@@ -44,6 +50,7 @@ public:
         maxBlock = block;
         mixL.setSize (1, maxBlock);
         mixR.setSize (1, maxBlock);
+        tuner.prepareNode (sr, maxBlock);
         master.reset (sr, 0.02);
         master.setCurrentAndTargetValue (masterTarget);
         prepared = true;
@@ -87,15 +94,21 @@ public:
             render (*live, n, io);
 
         // A rig change fades this block out and the next one in, so re-cabling never clicks.
-        master.setTargetValue (masterTarget);
+        if (tuning && tunerChannel < numIn && in[tunerChannel] != nullptr)
+            tuner.feed (in[tunerChannel], n);
+        master.setTargetValue (muted || tuning ? 0.0f : masterTarget.load());
+        float top = 0.0f;
         for (int i = 0; i < n; ++i)
         {
             float g = master.getNextValue();
             if (incoming != nullptr) g *= 1.0f - float (i) / float (n);
             if (fadeIn) g *= float (i) / float (n);
-            if (numOut > 0 && out[0] != nullptr) out[0][i] = softClip (io.mixL[i] * g);
-            if (numOut > 1 && out[1] != nullptr) out[1][i] = softClip (io.mixR[i] * g);
+            const float l = io.mixL[i] * g, r = io.mixR[i] * g;
+            top = std::max (top, std::max (std::abs (l), std::abs (r)));
+            if (numOut > 0 && out[0] != nullptr) out[0][i] = softClip (l);
+            if (numOut > 1 && out[1] != nullptr) out[1][i] = softClip (r);
         }
+        for (float prev = outPeak; top > prev && ! outPeak.compare_exchange_weak (prev, top);) {}
         fadeIn = false;
 
         if (incoming != nullptr)
@@ -157,6 +170,7 @@ private:
             applyParams (*node, n);
             if (node != (it != byId.end() ? it->second : nullptr) || fresh)
                 node->prepareNode (sr, maxBlock);
+            node->configure();
             next[id] = node;
         }
         byId = std::move (next);

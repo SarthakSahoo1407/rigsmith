@@ -64,131 +64,261 @@ struct Joiner : Node // p: levelA, levelB, phaseB
     }
 };
 
-struct Boost : Node // p: gain dB, treble dB
+// Boost: clean (flat), treble booster (the classic germanium top-end lift), or mid boost.
+struct Boost : Node // p: model, gain dB, tone 0..10
 {
     Boost() : Node (1, 1) {}
-    Biquad treble;
+    Biquad shape;
     SmoothedValue<float> gain;
-    void prepare (int) override { gain.reset (sr, 0.02); gain.setCurrentAndTargetValue (dbToGain (p[0])); }
-    void retune() override { treble.set (Biquad::HighShelf, sr, 2500, 0.707, p[1]); gain.setTargetValue (dbToGain (p[0])); }
+    void prepare (int) override { gain.reset (sr, 0.02); gain.setCurrentAndTargetValue (dbToGain (p[1])); }
+    void retune() override
+    {
+        const int m = (int) p[0];
+        const double tone = (p[2] - 5) * 1.2;
+        if (m == 0) shape.set (Biquad::HighShelf, sr, 3000, 0.707, tone);
+        else if (m == 1) shape.set (Biquad::HighShelf, sr, 1500, 0.6, 8 + tone);
+        else shape.set (Biquad::Peak, sr, 900, 0.8, 6 + tone);
+        gain.setTargetValue (dbToGain (p[1]));
+    }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
         for (int i = 0; i < n; ++i)
-            out[0][i] = treble (in[0][i] * gain.getNextValue());
+            out[0][i] = std::tanh (shape (in[0][i]) * gain.getNextValue() * 0.8f) / 0.8f; // runs out of headroom only when pushed hard
     }
 };
 
-// Overdrive/distortion: mid-hump pre-EQ into an oversampled soft clipper, then a tone lowpass.
-struct Drive : Node // p: drive|fuzz 0..10, tone 0..10, level 0..10
+// Drive pedals. Overdrive: low end left clean, only mids clip, soft. Distortion: op-amp gain into
+// hard clipping. Amp in a box: two tube-like stages. Metal: hard clipping with the low end and
+// upper mids pushed and the lower mids scooped.
+// Fuzz: germanium (soft one side, hard the other, bass-rich), or sustainer (two hard stages, scooped tone).
+struct Drive : Node // p: model, drive|fuzz 0..10, tone 0..10, level 0..10
 {
     explicit Drive (bool fuzzIn) : Node (1, 1), fuzz (fuzzIn) {}
     const bool fuzz;
-    Biquad pre, hump, tone;
-    Shaper shaper;
+    Biquad pre, hump, post1, post2, tone, toneHp;
+    Shaper shaper { 3 };
+    std::array<Biquad, 2> stageLp;
     SmoothedValue<float> level;
+    int model = 0;
     float drive = 1;
 
     void prepare (int maxBlock) override { shaper.prepare (maxBlock); level.reset (sr, 0.02); }
     void retune() override
     {
-        pre.set (Biquad::HighPass, sr, fuzz ? 40 : 120);
-        hump.set (Biquad::Peak, sr, 720, 0.7, fuzz ? 0 : 6);
-        tone.set (Biquad::LowPass, sr, (fuzz ? 600 : 800) * std::pow (10.0, p[1] / 10.0));
-        drive = dbToGain (fuzz ? 20 + p[0] * 4 : 6 + p[0] * 4.5f);
-        level.setTargetValue (dbToGain (-30 + p[2] * 3.6f));
+        model = (int) p[0];
+        const float d = p[1] / 10.0f, t = p[2] / 10.0f;
+        const double os = shaper.rate (sr);
+        for (auto& f : stageLp) f.set (Biquad::LowPass, os, 7000);
+        if (fuzz)
+        {
+            pre.set (Biquad::HighPass, sr, model == 0 ? 30 : 60);
+            hump.set (Biquad::Peak, sr, 700, 0.7, 0);
+            drive = dbToGain (model == 0 ? 20 + d * 30 : 25 + d * 30);
+            tone.set (Biquad::LowPass, sr, model == 0 ? 2000 + t * 8000 : 1000);
+            toneHp.set (Biquad::HighPass, sr, 1000);
+            post1.set (Biquad::Peak, sr, 120, 0.7, model == 0 ? 3 : 2);
+            post2.set (Biquad::Peak, sr, 600, 0.7, 0);
+        }
+        else
+        {
+            const double preHz[] = { 720, 60, 100, 120 };
+            pre.set (Biquad::HighPass, sr, preHz[model], 0.6);
+            hump.set (Biquad::Peak, sr, model == 2 ? 800 : 900, 0.7, model == 0 ? 3 : model == 2 ? 4 : 0);
+            const float lo[] = { 12, 18, 12, 24 }, hi[] = { 40, 54, 42, 60 }; // an overdrive's mids are boosted ~12 dB even at minimum drive
+            drive = dbToGain (lo[model] + d * (hi[model] - lo[model]));
+            tone.set (Biquad::LowPass, sr, (model == 1 ? 500 : 1200) * std::pow (model == 1 ? 16.0 : 7.0, (double) t));
+            post1.set (Biquad::Peak, sr, model == 3 ? 100 : 120, 0.8, model == 3 ? 8 : 0);
+            post2.set (Biquad::Peak, sr, model == 3 ? 500 : 1200, 0.8, model == 3 ? -6 : 0);
+            toneHp.set (Biquad::Peak, sr, 1300, 1.0, model == 3 ? 7 : 0);
+        }
+        level.setTargetValue (dbToGain (-30 + p[3] * 3.6f));
     }
+
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
+        float* x = out[0];
+        for (int i = 0; i < n; ++i) x[i] = hump (pre (in[0][i])) * drive;
+        auto& lp = stageLp;
+        if (fuzz && model == 0)
+            shaper.run (x, n, [] (float v) { return v > 0 ? std::tanh (v) : std::max (-0.6f, std::tanh (v * 1.6f) * 0.6f); });
+        else if (fuzz)
+            shaper.run (x, n, [&lp] (float v) { v = lp[0] (std::tanh (v)) * 8.0f; return std::tanh (v); });
+        else if (model == 0) // overdrive: soft diodes
+            shaper.run (x, n, [] (float v) { return v / std::pow (1.0f + std::pow (std::abs (v), 2.5f), 0.4f); });
+        else if (model == 2)
+            shaper.run (x, n, [&lp] (float v) { v = lp[0] (std::tanh (v + 0.15f) - 0.149f) * 6.0f; return std::tanh (v + 0.1f) - 0.0997f; });
+        else if (model == 1) // op-amp into hard-kneed diodes
+            shaper.run (x, n, [] (float v) { return hardKnee (v); });
+        else // metal: two hard stages
+            shaper.run (x, n, [&lp] (float v) { return hardKnee (lp[1] (hardKnee (v)) * 6.0f); });
         for (int i = 0; i < n; ++i)
-            out[0][i] = hump (pre (in[0][i])) * drive;
-        if (fuzz) // asymmetric, harder clipping: the splatty, gated fuzz edge
-            shaper.run (out[0], n, [] (float x) { return x > 0 ? std::tanh (x * 1.5f) : std::tanh (x * 0.8f) * 0.7f; });
-        else
-            shaper.run (out[0], n, [] (float x) { return std::tanh (x); });
-        for (int i = 0; i < n; ++i)
-            out[0][i] = tone (out[0][i]) * level.getNextValue();
+        {
+            float y = x[i];
+            if (fuzz && model == 1)
+            {
+                const float t = p[2] / 10.0f; // sustainer tone: crossfade a lowpass and a highpass, scooping the mids
+                y = (1 - t) * tone (y) + t * toneHp (y);
+            }
+            else y = tone (y);
+            if (! fuzz && model == 0) y = 0.6f * y + in[0][i]; // overdrive: clipped mids on top of the full clean signal
+            x[i] = post2 (post1 (fuzz ? y : toneHp (y))) * level.getNextValue();
+        }
     }
+
+    static float hardKnee (float v) { return v / std::pow (1.0f + std::pow (std::abs (v), 4.0f), 0.25f); }
 };
 
-// Amp preamp: input filter, 1-2 gain stages, tone stack. Output = the Send jack.
-struct AmpPre : Node // p: voicing, gain, bass, mid, treble, master
+// Amp models: gain staging, tone stack voicing and power section per model.
+struct AmpModel
+{
+    int stages;                  // preamp gain stages
+    float gainLoDb, gainHiDb;    // first-stage drive across the gain knob
+    float interDb;               // gain between stages
+    float bias;                  // stage asymmetry (even harmonics)
+    float inHp, stageHp, stageLp, brightDb;
+    float bassHz, midHz, midQ, midBiasDb, trebleHz;
+    float powerDrive, sag, depthHz, depthDb, presenceHz;
+    float trim;
+    float bassLiftDb; // a real tone stack at noon leaves bass well above the mids
+};
+
+// Order matches the model list in src/catalog.ts.
+inline const AmpModel AMPS[] = {
+    // stg  gainLo gainHi inter bias  inHp stHp stLp  brt  bass mid   midQ midB treb  pDrv sag  depHz depDb presHz trim
+    { 1, 0, 20, 0, .05f, 40, 20, 12000, 3, 90, 450, .7f, -5, 2500, .7f, .10f, 90, 3, 4000, 1.76f, 1 },  // US Clean: scooped, sparkly
+    { 2, 6, 30, 6, .15f, 45, 20, 5000, 0, 110, 800, .8f, 3, 2200, 1.6f, .50f, 100, 2, 3000, .53f, 0 },  // Tweed: dark, mid-forward, breaks up early
+    { 2, 4, 28, 8, .08f, 60, 25, 10000, 4, 120, 1800, 1.f, 3, 2800, 1.2f, .30f, 110, 3, 4500, .5f, 3 },  // UK Chime: jangly upper mids
+    { 2, 10, 36, 12, .10f, 80, 30, 7000, 3, 100, 800, .8f, 3, 2500, 1.4f, .25f, 100, 4, 3800, .34f, 1 },  // UK Plexi
+    { 3, 12, 40, 18, .12f, 100, 50, 6000, 2, 100, 750, .8f, 4, 2400, 1.3f, .20f, 100, 6, 3800, .33f, 3 },  // UK Lead
+    { 4, 14, 44, 20, .10f, 90, 45, 5500, 1, 80, 650, .7f, -3, 2600, 1.5f, .45f, 85, 7, 4500, .38f, 3 }, // US Rectified: huge lows, scooped
+    { 4, 16, 46, 22, .12f, 120, 60, 5500, 2, 100, 900, .7f, 2, 3000, 1.3f, .15f, 100, 7, 4200, .26f, 3 }, // Modern High Gain: tight, aggressive
+    { 3, 10, 38, 14, .10f, 90, 45, 5500, 0, 100, 700, .6f, 3, 2200, 1.2f, .35f, 100, 4, 3500, .41f, 3 }, // Boutique Lead: smooth, vocal
+    { 1, 0, 14, 0, 0, 40, 20, 8000, 0, 100, 400, .7f, 1, 3000, .5f, 0, 100, 2, 5000, 2.55f, 2 }, // Jazz Clean: warm, flat
+};
+
+inline const AmpModel& ampModel (float p0) { return AMPS[(size_t) jlimit (0, (int) std::size (AMPS) - 1, (int) p0)]; }
+
+// Amp preamp: input filter and bright cap, then every gain stage at 8x oversampling with
+// interstage coupling (highpass) and treble roll-off (lowpass), then the tone stack. Output = the Send jack.
+struct AmpPre : Node // p: model, gain, bass, mid, treble, presence, master
 {
     AmpPre() : Node (1, 1) {}
-    Biquad inHp, stageHp, stageLp, bass, mid, treble;
-    Shaper shaper1, shaper2;
-    float gain1 = 1, gain2 = 1, outTrim = 1;
-    int voicing = 0;
+    Biquad inHp, bright, bass, mid, treble;
+    std::array<Biquad, 4> stHp, stLp;
+    Shaper shaper { 3 };
+    float inGain = 1, inter = 1, bias = 0, biasOffset = 0;
+    int stages = 1;
 
-    void prepare (int maxBlock) override { shaper1.prepare (maxBlock); shaper2.prepare (maxBlock); }
+    void prepare (int maxBlock) override { shaper.prepare (maxBlock); }
     void retune() override
     {
-        voicing = (int) p[0];
-        const float g = p[1] / 10.0f;
-        inHp.set (Biquad::HighPass, sr, voicing == 2 ? 120 : 80);
-        stageHp.set (Biquad::HighPass, sr, 200);
-        stageLp.set (Biquad::LowPass, sr, 6500);
-        gain1 = voicing == 0 ? 1 + g * 5 : voicing == 1 ? 2 + g * 40 : 4 + g * 120;
-        gain2 = voicing == 2 ? 6.0f : 1.0f;
-        outTrim = voicing == 0 ? 0.8f : 0.5f;
-        bass.set (Biquad::LowShelf, sr, 120, 0.707, (p[2] - 5) * 2.4);
-        mid.set (Biquad::Peak, sr, 650, 0.8, (p[3] - 5) * 2.4);
-        treble.set (Biquad::HighShelf, sr, 3200, 0.707, (p[4] - 5) * 2.4);
+        const auto& m = ampModel (p[0]);
+        const double os = shaper.rate (sr);
+        stages = m.stages;
+        inGain = dbToGain (m.gainLoDb + p[1] / 10.0f * (m.gainHiDb - m.gainLoDb));
+        inter = dbToGain (m.interDb);
+        bias = m.bias;
+        biasOffset = std::tanh (bias);
+        inHp.set (Biquad::HighPass, sr, m.inHp);
+        bright.set (Biquad::HighShelf, sr, 2000, 0.6, m.brightDb * (1.0f - p[1] / 20.0f)); // a bright cap matters less as gain rises
+        for (size_t s = 0; s < stHp.size(); ++s)
+        {
+            stHp[s].set (Biquad::HighPass, os, s == 0 ? m.stageHp * 0.5f : m.stageHp);
+            stLp[s].set (Biquad::LowPass, os, m.stageLp);
+        }
+        bass.set (Biquad::LowShelf, sr, m.bassLiftDb > 3 ? 250 : m.bassHz, 0.7, (p[2] - 5) * 2.4 + m.bassLiftDb);
+        mid.set (Biquad::Peak, sr, m.midHz, m.midQ, (p[3] - 5) * 2.4 + m.midBiasDb);
+        treble.set (Biquad::HighShelf, sr, m.trebleHz, 0.7, (p[4] - 5) * 2.4);
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
         float* x = out[0];
-        for (int i = 0; i < n; ++i)
-            x[i] = inHp (in[0][i]) * gain1;
-        // tanh with a small bias clips one side earlier: the even harmonics of a tube stage.
-        auto tube = [] (float v) { return std::tanh (v + 0.1f) - 0.0997f; };
-        shaper1.run (x, n, tube);
-        if (voicing == 2)
-        {
-            for (int i = 0; i < n; ++i)
-                x[i] = stageHp (x[i]) * gain2;
-            shaper2.run (x, n, tube);
-            for (int i = 0; i < n; ++i)
-                x[i] = stageLp (x[i]);
-        }
-        for (int i = 0; i < n; ++i)
-            x[i] = treble (mid (bass (x[i]))) * outTrim;
+        for (int i = 0; i < n; ++i) x[i] = bright (inHp (in[0][i])) * inGain;
+        shaper.run (x, n, [this] (float v) {
+            for (int s = 0; s < stages; ++s)
+            {
+                v = std::tanh (v + bias) - biasOffset;
+                v = stHp[(size_t) s] (stLp[(size_t) s] (v));
+                if (s + 1 < stages) v *= inter;
+            }
+            return v;
+        });
+        for (int i = 0; i < n; ++i) x[i] = treble (mid (bass (x[i])));
     }
 };
 
-// Amp power section: Return jack in, speaker jack out. Master drives it into soft saturation.
+// Amp power section: Return jack in, speaker jack out. The master pushes the power tubes; the supply
+// sags as you play harder; the speaker's resonance (depth) and the presence control shape the result.
 struct AmpPower : Node
 {
     AmpPower() : Node (1, 1) {}
-    SmoothedValue<float> master;
-    void prepare (int) override { master.reset (sr, 0.02); master.setCurrentAndTargetValue (masterGain()); }
-    float masterGain() const { const float m = p[5] / 10.0f; return 0.05f + m * m * 3.0f; }
+    Biquad depth, presence;
+    Envelope env;
+    SmoothedValue<float> drive;
+    float sag = 0, trim = 1;
+
+    float driveFor() const { const float m = p[6] / 10.0f; return (0.08f + m * m * 3.0f) * ampModel (p[0]).powerDrive; }
+    void prepare (int) override { drive.reset (sr, 0.03); drive.setCurrentAndTargetValue (driveFor()); env.set (sr, 5, 150); }
+    void retune() override
+    {
+        const auto& m = ampModel (p[0]);
+        depth.set (Biquad::Peak, sr, m.depthHz, 0.9, m.depthDb);
+        presence.set (Biquad::HighShelf, sr, m.presenceHz, 0.7, (p[5] - 5) * 2.0);
+        sag = m.sag;
+        trim = m.trim;
+    }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
-        master.setTargetValue (masterGain());
+        drive.setTargetValue (driveFor());
         for (int i = 0; i < n; ++i)
-            out[0][i] = std::tanh (in[0][i] * master.getNextValue()) * 0.9f;
+        {
+            const float g = drive.getNextValue() / (1.0f + sag * 3.0f * env (in[0][i]));
+            const float y = std::tanh (in[0][i] * g + 0.05f) - 0.04996f;
+            out[0][i] = presence (depth (y)) * trim * 0.8f;
+        }
     }
 };
 
-// Speaker cab: low cut, low resonance, presence peak, steep high cut. One voicing per size.
-struct Cab : Node // p: size (1x12, 2x12, 4x12)
+// Speaker cab as an impulse response, the way modern amp sims do it: the cab size sets the low end
+// (a closed 4x12 thumps around 100 Hz, an open 1x12 loses it), the speaker sets mids and highs and
+// how steeply they fall above 5-7 kHz, and seeded cone break-up ripple keeps it from sounding like EQ.
+struct Cab : Node // p: size (1x12, 2x12, 4x12), speaker
 {
     Cab() : Node (1, 1) {}
-    Biquad hp, res, dip, presence, lp1, lp2;
-    void retune() override
+    dsp::Convolution conv;
+    int loaded = -1;
+
+    static Curve curveFor (int size, int speaker)
     {
-        const int s = (int) p[0];
-        hp.set (Biquad::HighPass, sr, s == 0 ? 90 : s == 1 ? 80 : 70);
-        res.set (Biquad::Peak, sr, s == 0 ? 120 : s == 1 ? 110 : 100, 1.2, s == 0 ? 3 : s == 1 ? 4 : 5);
-        dip.set (Biquad::Peak, sr, 400, 1.0, s == 2 ? -3 : -1);
-        presence.set (Biquad::Peak, sr, s == 0 ? 2500 : 2100, 1.0, s == 0 ? 4 : 3.5);
-        lp1.set (Biquad::LowPass, sr, s == 0 ? 5500 : s == 1 ? 5000 : 4500);
-        lp2.set (Biquad::LowPass, sr, s == 0 ? 5500 : s == 1 ? 5000 : 4500);
+        static const Curve lows[] = {
+            { { 40, -24 }, { 60, -14 }, { 80, -6 }, { 110, -1.5f }, { 140, -1 }, { 180, -2 }, { 250, 0 } }, // 1x12 open back
+            { { 40, -22 }, { 60, -11 }, { 80, -3 }, { 105, 0.5f }, { 125, 1 }, { 180, -0.5f }, { 250, 0 } }, // 2x12
+            { { 40, -20 }, { 55, -10 }, { 75, -2 }, { 100, 2 }, { 118, 2 }, { 160, 0 }, { 250, 0 } },        // 4x12 closed
+        };
+        static const Curve highs[] = {
+            { { 400, 0 }, { 800, -1 }, { 1300, 0 }, { 2000, 2.5f }, { 2800, 2 }, { 3600, 0.5f }, { 4500, -4 }, { 5500, -11 }, { 7000, -22 }, { 9000, -32 }, { 14000, -48 } },              // warm 25W
+            { { 400, -1 }, { 650, -3.5f }, { 1000, -2 }, { 1600, 1 }, { 2300, 4 }, { 2900, 2.5f }, { 3600, 4.5f }, { 4300, 2 }, { 5200, -5 }, { 6500, -16 }, { 8000, -26 }, { 11000, -40 } }, // aggressive 60W
+            { { 400, 0 }, { 800, 0 }, { 1500, 1 }, { 2500, 3 }, { 3500, 3.5f }, { 4500, 1 }, { 5500, -5 }, { 7000, -15 }, { 9000, -27 }, { 14000, -44 } },                                 // chimey alnico
+            { { 400, -1 }, { 650, -2 }, { 1000, -1 }, { 2000, 1 }, { 3000, 2 }, { 4500, 2 }, { 6000, -3 }, { 7500, -12 }, { 9500, -24 }, { 14000, -40 } },                                  // sparkly US
+        };
+        auto c = lows[jlimit (0, 2, size)];
+        for (const auto& pt : highs[jlimit (0, 3, speaker)]) c.push_back (pt);
+        return c;
+    }
+    void prepare (int maxBlock) override { conv.prepare ({ sr, (uint32) maxBlock, 1 }); loaded = -1; }
+    void configure() override
+    {
+        const int size = jlimit (0, 2, (int) p[0]), speaker = jlimit (0, 3, (int) p[1]), key = size * 4 + speaker;
+        if (key == loaded) return;
+        loaded = key;
+        conv.loadImpulseResponse (designIr (sr, (int) (sr * 0.05), curveFor (size, speaker), 2.5f, 900, 17 + key), sr,
+                                  dsp::Convolution::Stereo::no, dsp::Convolution::Trim::no, dsp::Convolution::Normalise::no);
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
-        for (int i = 0; i < n; ++i)
-            out[0][i] = lp2 (lp1 (presence (dip (res (hp (in[0][i]))))));
+        FloatVectorOperations::copy (out[0], in[0], n);
+        dsp::AudioBlock<float> block (const_cast<float**> (out), 1, (size_t) n);
+        conv.process (dsp::ProcessContextReplacing<float> (block));
     }
 };
 
@@ -206,10 +336,12 @@ struct Mic : Node // p: model, position 0..1, distance 0..1
     {
         const int m = (int) p[0];
         const float x = p[1], d = p[2];
-        color.set (m == 1 ? Biquad::HighShelf : Biquad::Peak, sr, m == 1 ? 4000 : 4500, m == 1 ? 0.707 : 1.5, m == 0 ? 4 : m == 1 ? -6 : 1);
+        if (m == 0) color.set (Biquad::Peak, sr, 5000, 1.2, 2.5);           // dynamic: presence lift
+        else if (m == 1) color.set (Biquad::HighShelf, sr, 4000, 0.707, -6); // ribbon: dark, smooth
+        else color.set (Biquad::Peak, sr, 3000, 0.8, 1);                     // condenser: open
         air.set (Biquad::HighShelf, sr, 10000, 0.707, m == 2 ? 2 : 0);
         edge.set (Biquad::LowPass, sr, 12000 * std::pow (3500.0 / 12000.0, x));
-        proximity.set (Biquad::LowShelf, sr, 150, 0.707, (m == 1 ? 8 : 6) * (1 - d));
+        proximity.set (Biquad::LowShelf, sr, 150, 0.707, (m == 1 ? 6 : 3) * (1 - d));
         gain = 1 - 0.6f * d;
         delay = jlimit (0, (int) ring.size() - 1, (int) (d * 0.002 * sr));
     }
@@ -224,6 +356,127 @@ struct Mic : Node // p: model, position 0..1, distance 0..1
     }
 };
 
+// Pitch shifter: overlapping grains read the input back at the new speed and crossfade (sin² windows
+// sum to one). Each new grain starts at the offset where it lines up best with the grain it fades
+// into (input autocorrelation), so the splices don't comb or gargle the way blind splices do.
+// Left and right detune in opposite directions for width. +12 with a little detune is a 12-string.
+struct PitchShift : Node // p: interval semitones, detune cents, mix
+{
+    PitchShift() : Node (1, 2) {}
+    struct Voice
+    {
+        struct Grain { float delay = 0; int age = 0; bool live = false; };
+        std::array<Grain, 2> grains;
+        int sinceStart = 1 << 30, nextGrain = 0;
+
+        float next (const DelayLine& x, float ratio, int len, int search)
+        {
+            if (sinceStart >= len / 2)
+            {
+                auto& g = grains[(size_t) nextGrain];
+                const auto& other = grains[(size_t) (1 - nextGrain)];
+                const float start = 4.0f + std::max (0.0f, (float) len * (ratio - 1.0f));
+                g = { start + (other.live ? bestOffset (x, other.delay, start, search) : 0.0f), 0, true };
+                nextGrain = 1 - nextGrain;
+                sinceStart = 0;
+            }
+            ++sinceStart;
+            float sum = 0;
+            for (auto& g : grains)
+            {
+                if (! g.live) continue;
+                const float w = std::sin (MathConstants<float>::pi * (float) g.age / (float) len);
+                sum += w * w * x.read (g.delay);
+                g.delay -= ratio - 1.0f;
+                g.live = ++g.age < len;
+            }
+            return sum;
+        }
+
+        // The extra delay (0..search) at which the input most resembles itself at `from`.
+        static float bestOffset (const DelayLine& x, float from, float start, int search)
+        {
+            constexpr int window = 256;
+            float best = -1e9f, at = 0;
+            for (int k = 0; k <= search; k += 2)
+            {
+                float c = 0, e = 1e-9f;
+                for (int j = 0; j < window; j += 2)
+                {
+                    const float v = x.read (start + (float) (k + j));
+                    c += x.read (from + (float) j) * v;
+                    e += v * v;
+                }
+                if (c / std::sqrt (e) > best) { best = c / std::sqrt (e); at = (float) k; }
+            }
+            return at;
+        }
+    };
+    DelayLine line;
+    Voice left, right;
+    void prepare (int) override { line.prepare ((int) (sr * 0.12)); left = right = {}; }
+    void render (const float* const* in, float* const* out, int n, IO&) override
+    {
+        const int len = (int) (0.03 * sr), search = (int) (0.012 * sr);
+        const float base = (float) p[0] / 12.0f, cents = (float) p[1] / 1200.0f, mix = p[2];
+        const float rl = std::pow (2.0f, base + cents), rr = std::pow (2.0f, base - cents);
+        for (int i = 0; i < n; ++i)
+        {
+            line.push (in[0][i]);
+            out[0][i] = in[0][i] + mix * left.next (line, rl, len, search);
+            out[1][i] = in[0][i] + mix * right.next (line, rr, len, search);
+        }
+    }
+};
+
+// Acoustic simulator: an impulse response that turns a magnetic pickup into a miked acoustic. The
+// curve adds the body's air and top resonances, scoops the boxy low mids a pickup is heavy in, and
+// restores the string sparkle a pickup never had; dense ripple from 150 Hz up is the wood.
+struct Acoustic : Node // p: body (dreadnought, jumbo, parlor, nylon), mix, top 0..10, level dB
+{
+    Acoustic() : Node (1, 1) {}
+    Biquad top;
+    dsp::Convolution conv;
+    std::vector<float> dry;
+    int loadedBody = -1;
+
+    static Curve curveFor (int body)
+    {
+        static const Curve bodies[] = {
+            { { 40, -20 }, { 70, -5 }, { 100, 2 }, { 140, 1 }, { 220, 0 }, { 320, -3 }, { 500, -7 }, { 800, -6 }, { 1300, -3 }, { 2200, -1 }, { 3500, 2 }, { 5500, 7 }, { 8000, 10 }, { 12000, 9 }, { 17000, 0 } }, // dreadnought
+            { { 40, -16 }, { 65, -3 }, { 90, 3 }, { 130, 2 }, { 200, 1 }, { 320, -2 }, { 500, -6 }, { 800, -6 }, { 1300, -3 }, { 2200, -1 }, { 3500, 1 }, { 5500, 6 }, { 8000, 9 }, { 12000, 8 }, { 17000, 0 } },  // jumbo
+            { { 40, -26 }, { 80, -10 }, { 120, -4 }, { 200, 0 }, { 260, 1 }, { 400, -3 }, { 650, -6 }, { 1000, -4 }, { 1800, -1 }, { 3000, 2 }, { 5000, 7 }, { 8000, 10 }, { 12000, 9 }, { 17000, 0 } },   // parlor
+            { { 40, -20 }, { 75, -5 }, { 105, 2 }, { 180, 2 }, { 280, 0 }, { 450, -5 }, { 800, -5 }, { 1400, -3 }, { 2500, -1 }, { 4000, 1 }, { 6000, 3 }, { 9000, 2 }, { 13000, -4 }, { 17000, -12 } }, // nylon
+        };
+        return bodies[jlimit (0, 3, body)];
+    }
+    void prepare (int maxBlock) override
+    {
+        conv.prepare ({ sr, (uint32) maxBlock, 1 });
+        dry.assign ((size_t) maxBlock, 0.0f);
+        loadedBody = -1;
+    }
+    void configure() override
+    {
+        const int body = jlimit (0, 3, (int) p[0]);
+        if (body == loadedBody) return;
+        loadedBody = body;
+        conv.loadImpulseResponse (designIr (sr, (int) (sr * 0.08), curveFor (body), 3.0f, 150, 41 + body), sr,
+                                  dsp::Convolution::Stereo::no, dsp::Convolution::Trim::no, dsp::Convolution::Normalise::no);
+    }
+    void retune() override { top.set (Biquad::HighShelf, sr, 7000, 0.7, (p[2] - 5) * 1.5); }
+    void render (const float* const* in, float* const* out, int n, IO&) override
+    {
+        FloatVectorOperations::copy (dry.data(), in[0], n);
+        FloatVectorOperations::copy (out[0], in[0], n);
+        dsp::AudioBlock<float> block (const_cast<float**> (out), 1, (size_t) n);
+        conv.process (dsp::ProcessContextReplacing<float> (block));
+        const float mix = p[1], level = dbToGain (p[3]);
+        for (int i = 0; i < n; ++i)
+            out[0][i] = top ((1 - mix) * dry[(size_t) i] + mix * out[0][i]) * level;
+    }
+};
+
 // Tuner: mutes the signal while engaged. The UI asks detect() for the pitch.
 struct Tuner : Node // p: reference A4 Hz
 {
@@ -234,12 +487,18 @@ struct Tuner : Node // p: reference A4 Hz
 
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
+        feed (in[0], n);
+        FloatVectorOperations::clear (out[0], n);
+    }
+
+    // Audio thread: listen to `n` samples. The standalone tuner calls this with the raw input.
+    void feed (const float* x, int n)
+    {
         int wi = w.load (std::memory_order_relaxed);
         for (int i = 0; i < n; ++i)
         {
-            ring[(size_t) wi].store (in[0][i], std::memory_order_relaxed);
+            ring[(size_t) wi].store (x[i], std::memory_order_relaxed);
             wi = (wi + 1) & (size - 1);
-            out[0][i] = 0.0f;
         }
         w.store (wi, std::memory_order_release);
     }
@@ -294,6 +553,7 @@ struct Gate : Node // p: threshold dB, release ms
     Envelope env;
     float gain = 0, gainAtt = 0, gainRel = 0;
     bool open = false;
+    std::atomic<bool> openOut { false }; // for the pedal's light
 
     void retune() override
     {
@@ -311,6 +571,7 @@ struct Gate : Node // p: threshold dB, release ms
             gain = open ? gainAtt * gain + (1 - gainAtt) : gainRel * gain;
             out[0][i] = in[0][i] * gain;
         }
+        openOut.store (open, std::memory_order_relaxed);
     }
 };
 
@@ -393,7 +654,7 @@ struct Wah : Node // p: position 0..1, q
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
         freq.setTargetValue (hz());
-        const float q = p[1], makeup = 1.5f / std::max (1.0f, q);
+        const float q = p[1], makeup = 1.0f / (1.0f + (q - 1.0f) * 0.08f);
         for (int i = 0; i < n; i += 16) // retune every 16 samples while the treadle moves
         {
             freq.skip (std::min (16, n - i) - 1);
@@ -508,45 +769,59 @@ struct Tremolo : Node // p: rate Hz, depth, shape (sine/square)
     }
 };
 
-// Delay: echoes added on top of the dry signal; tone darkens each repeat. Ping-pong bounces
-// the repeats between the left and right outputs.
-struct Delay : Node // p: time ms, feedback, tone 0..10, mix, pingpong
+// Delay: echoes added on top of the dry signal. Digital repeats stay clean; tape repeats wobble
+// (wow and flutter), lose lows and highs and saturate; analog (bucket brigade) repeats get darker
+// fast. Ping-pong bounces the repeats between the left and right outputs.
+struct Delay : Node // p: model, time ms, feedback, tone 0..10, mix, pingpong
 {
     Delay() : Node (1, 2) {}
     DelayLine left, right;
-    Biquad toneL, toneR;
+    Biquad toneL, toneR, hpL, hpR;
+    Lfo wow, flutter;
     SmoothedValue<float> time;
+    int model = 0;
     void prepare (int) override
     {
         left.prepare ((int) (sr * 2.1));
         right.prepare ((int) (sr * 2.1));
         time.reset (sr, 0.1);
-        time.setCurrentAndTargetValue ((float) (p[0] * 0.001 * sr));
+        time.setCurrentAndTargetValue ((float) (p[1] * 0.001 * sr));
     }
     void retune() override
     {
-        const double hz = 1000.0 * std::pow (12.0, p[2] / 10.0);
+        model = (int) p[0];
+        const double t = p[3] / 10.0;
+        const double hz = model == 0 ? 1000 * std::pow (12.0, t) : model == 1 ? 800 * std::pow (6.0, t) : 600 * std::pow (5.0, t);
         toneL.set (Biquad::LowPass, sr, hz);
         toneR.set (Biquad::LowPass, sr, hz);
+        hpL.set (Biquad::HighPass, sr, model == 1 ? 150 : model == 2 ? 80 : 20);
+        hpR.set (Biquad::HighPass, sr, model == 1 ? 150 : model == 2 ? 80 : 20);
+    }
+    float repeat (float v, Biquad& tone, Biquad& hp) const
+    {
+        v = hp (tone (v));
+        return model == 1 ? std::tanh (v * 1.3f) / 1.3f : v;
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
-        time.setTargetValue ((float) (p[0] * 0.001 * sr));
-        const float fb = p[1], mix = p[3];
-        const bool pingPong = p[4] > 0.5f;
+        time.setTargetValue ((float) (p[1] * 0.001 * sr));
+        const float fb = p[2], mix = p[4];
+        const bool pingPong = p[5] > 0.5f;
         for (int i = 0; i < n; ++i)
         {
-            const float x = in[0][i], d = time.getNextValue();
-            const float l = left.read (d), r = right.read (d);
+            float d = time.getNextValue();
+            if (model == 1) d *= 1.0f + 0.003f * wow.next (0.5f, sr) + 0.0006f * flutter.next (6.0f, sr);
+            else if (model == 2) d *= 1.0f + 0.001f * wow.next (0.4f, sr);
+            const float x = in[0][i], l = left.read (d), r = right.read (d);
             if (pingPong)
             {
-                left.push (x + fb * toneR (r));
-                right.push (fb * toneL (l));
+                left.push (x + fb * repeat (r, toneR, hpR));
+                right.push (fb * repeat (l, toneL, hpL));
             }
             else
             {
-                left.push (x + fb * toneL (l));
-                right.push (x + fb * toneR (r));
+                left.push (x + fb * repeat (l, toneL, hpL));
+                right.push (x + fb * repeat (r, toneR, hpR));
             }
             out[0][i] = x + mix * l;
             out[1][i] = x + mix * r;
@@ -554,31 +829,80 @@ struct Delay : Node // p: time ms, feedback, tone 0..10, mix, pingpong
     }
 };
 
-// Reverb: pre-delay into JUCE's Freeverb-style stereo reverb, added on top of the dry signal.
-struct Reverb : Node // p: decay s, predelay ms, tone 0..10, mix
+// Reverb, added on top of the dry signal. Room, hall and plate use JUCE's stereo reverb with
+// different sizes and damping (the plate bright and thin in the lows). Spring is its own thing:
+// two delay lines with a chain of allpass filters in the loop, which smears each echo into the
+// familiar drip.
+struct Reverb : Node // p: model, decay s, predelay ms, tone 0..10, mix
 {
     Reverb() : Node (2, 2) {}
     juce::Reverb verb;
     DelayLine preL, preR;
+    Biquad wetHpL, wetHpR;
+    struct Spring
+    {
+        DelayLine line;
+        std::array<float, 8> x1 {}, y1 {};
+        Biquad lp, hp;
+        float last = 0;
+        float process (float x, float feedback, float length)
+        {
+            float v = lp (x) + feedback * last;
+            for (size_t k = 0; k < x1.size(); ++k) // dispersion: high frequencies arrive first
+            {
+                const float y = 0.65f * v + x1[k] - 0.65f * y1[k];
+                x1[k] = v;
+                y1[k] = y;
+                v = y;
+            }
+            line.push (v);
+            last = line.read (length);
+            return hp (last);
+        }
+    } springL, springR;
+    int model = 0;
+
     void prepare (int) override
     {
         verb.setSampleRate (sr);
         preL.prepare ((int) (sr * 0.25));
         preR.prepare ((int) (sr * 0.25));
+        springL.line.prepare ((int) (sr * 0.1));
+        springR.line.prepare ((int) (sr * 0.1));
     }
     void retune() override
     {
+        model = (int) p[0];
+        const float size = jlimit (0.0f, 1.0f, std::log (p[1] / 0.2f) / std::log (50.0f)), bright = p[3] / 10.0f;
         juce::Reverb::Parameters r;
-        r.roomSize = jlimit (0.0f, 1.0f, 0.3f + 0.68f * std::log (p[0] / 0.2f) / std::log (50.0f));
-        r.damping = 1.0f - p[2] / 10.0f * 0.9f;
+        r.roomSize = model == 0 ? 0.2f + 0.4f * size : model == 1 ? 0.3f + 0.68f * size : 0.5f + 0.45f * size;
+        r.damping = model == 2 ? 0.25f * (1 - bright) : 1.0f - bright * 0.9f;
+        r.width = model == 0 ? 0.7f : 1.0f;
         r.wetLevel = 1.0f;
         r.dryLevel = 0.0f;
-        r.width = 1.0f;
         verb.setParameters (r);
+        wetHpL.set (Biquad::HighPass, sr, model == 2 ? 300 : 60);
+        wetHpR.set (Biquad::HighPass, sr, model == 2 ? 300 : 60);
+        for (auto* s : { &springL, &springR })
+        {
+            s->lp.set (Biquad::LowPass, sr, 2500 + 2500 * bright);
+            s->hp.set (Biquad::HighPass, sr, 250);
+        }
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
-        const float d = std::max (1.0f, (float) (p[1] * 0.001 * sr));
+        const float mix = p[4];
+        if (model == 3)
+        {
+            const float fb = 0.4f + 0.5f * jlimit (0.0f, 1.0f, std::log (p[1] / 0.2f) / std::log (50.0f));
+            for (int i = 0; i < n; ++i)
+            {
+                out[0][i] = in[0][i] + mix * springL.process (in[0][i], fb, (float) (0.035 * sr));
+                out[1][i] = in[1][i] + mix * springR.process (in[1][i], fb, (float) (0.041 * sr));
+            }
+            return;
+        }
+        const float d = std::max (1.0f, (float) (p[2] * 0.001 * sr));
         for (int i = 0; i < n; ++i)
         {
             preL.push (in[0][i]);
@@ -587,9 +911,11 @@ struct Reverb : Node // p: decay s, predelay ms, tone 0..10, mix
             out[1][i] = preR.read (d);
         }
         verb.processStereo (out[0], out[1], n);
-        for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < n; ++i)
-                out[c][i] = in[c][i] + p[3] * out[c][i];
+        for (int i = 0; i < n; ++i)
+        {
+            out[0][i] = in[0][i] + mix * wetHpL (out[0][i]);
+            out[1][i] = in[1][i] + mix * wetHpR (out[1][i]);
+        }
     }
 };
 
@@ -715,6 +1041,8 @@ inline std::shared_ptr<Node> makeNode (const String& type)
     else if (type == "delay") n = std::make_shared<Delay>();
     else if (type == "reverb") n = std::make_shared<Reverb>();
     else if (type == "looper") n = std::make_shared<Looper>();
+    else if (type == "pitch") n = std::make_shared<PitchShift>();
+    else if (type == "acoustic") n = std::make_shared<Acoustic>();
     else n = std::make_shared<PassThrough> (1, 1);
     n->type = type;
     return n;

@@ -73,7 +73,8 @@ export const toggle = (rig: Rig, id: string) => update(rig, id, { on: !rig.devic
 export function setParam(rig: Rig, id: string, name: string, value: number): Rig {
   const p = def(rig.devices[id].type).params.find((x) => x.name === name);
   if (!p || !Number.isFinite(value)) return rig;
-  const v = Math.min(p.max, Math.max(p.min, p.options ? Math.round(value) : value));
+  const step = p.options ? 1 : p.step;
+  const v = Math.min(p.max, Math.max(p.min, step ? Math.round(value / step) * step : value));
   return update(rig, id, { params: { ...rig.devices[id].params, [name]: v } });
 }
 
@@ -85,6 +86,16 @@ export function placeMic(rig: Rig, micId: string, at?: MicPlacement): Rig {
   const was = rig.devices[micId].mic;
   if (mic === was || (mic && was && JSON.stringify(mic) === JSON.stringify(was))) return rig; // no change, no undo step
   return update(rig, micId, { mic });
+}
+
+// Plugs a device into the first free outlet, adding a power supply when every outlet is taken.
+export function powerUp(rig: Rig, id: string): Rig {
+  if (!def(rig.devices[id].type).power || isPowered(rig, id)) return rig;
+  for (const supply of Object.values(rig.devices).filter((d) => d.type === 'power'))
+    for (const j of def('power').jacks)
+      if (!cableAt(rig, { device: supply.id, jack: j.name })) return connect(rig, { device: supply.id, jack: j.name }, { device: id, jack: 'dc' });
+  const [next, supply] = addDevice(rig, 'power', { x: 0, y: 0 });
+  return connect(next, { device: supply, jack: '1' }, { device: id, jack: 'dc' });
 }
 
 export const isPowered = (rig: Rig, id: string) =>
@@ -146,6 +157,48 @@ export function connect(rig: Rig, a: JackRef, b: JackRef): Rig {
 }
 
 export const disconnect = (rig: Rig, cableId: string): Rig => ({ ...rig, cables: rig.cables.filter((c) => c.id !== cableId) });
+
+// A device's main jacks: the amp's speaker out, otherwise the first audio output or input.
+export const mainJack = (type: DeviceType, dir: 'in' | 'out') =>
+  type === 'amp' && dir === 'out' ? 'speaker' : def(type).jacks.find((j) => j.dir === dir && j.kind !== 'power')?.name;
+
+// Puts a device into a cable: the cable's source now feeds the device, and the device feeds where
+// the cable went. Throws (and changes nothing) when the device can't sit there.
+export function insertIntoCable(rig: Rig, cableId: string, id: string): Rig {
+  const c = rig.cables.find((x) => x.id === cableId);
+  if (!c) return rig;
+  const type = rig.devices[id].type;
+  const [inJack, outJack] = [mainJack(type, 'in'), mainJack(type, 'out')];
+  if (!inJack || !outJack) throw new Error(`A ${def(type).label} can't go in a cable`);
+  const r = connect(disconnect(rig, cableId), c.from, { device: id, jack: inJack });
+  return connect(r, { device: id, jack: outJack }, c.to);
+}
+
+// Swaps a device for another one in the same place: same position and on/off, cables moved to the
+// matching jacks (a stereo output's right side is dropped going into a mono pedal). Same type: only
+// the given knobs change. Returns the rig and the new device's id.
+export function replaceDevice(rig: Rig, id: string, type: DeviceType, params: Record<string, number> = {}): [Rig, string] {
+  const old = rig.devices[id];
+  const set = (r: Rig, target: string) => Object.entries(params).reduce((acc, [k, v]) => setParam(acc, target, k, v), r);
+  if (old.type === type) return [set(rig, id), id];
+
+  let [next, nid] = addDevice(rig, type, old.pos.board);
+  next = set(update(next, nid, { pos: old.pos, on: old.on }), nid);
+  const moved = rig.cables.filter((c) => c.from.device === id || c.to.device === id);
+  next = removeDevice(next, id);
+  const mapJack = (jack: string) => {
+    const j = def(old.type).jacks.find((x) => x.name === jack)!;
+    if (def(type).jacks.some((x) => x.name === jack && x.dir === j.dir && x.kind === j.kind)) return jack;
+    return j.kind !== 'power' && jack === mainJack(old.type, j.dir) ? mainJack(type, j.dir) : undefined;
+  };
+  for (const c of moved) {
+    const jack = mapJack(c.from.device === id ? c.from.jack : c.to.jack);
+    if (!jack) continue;
+    const swap = (r: JackRef) => (r.device === id ? { device: nid, jack } : r);
+    try { next = connect(next, swap(c.from), swap(c.to)); } catch { /* doesn't fit the new gear: left unplugged */ }
+  }
+  return [next, nid];
+}
 
 // A jack's place in the engine: which node, and which channel among that node's inputs or outputs.
 function endpoint(d: Device, jack: string) {
