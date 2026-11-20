@@ -10,8 +10,10 @@ import type { DeviceType } from './catalog';
 import type { Device, Rig, XY } from './rig';
 
 export type Size = { w: number; h: number };
-export type Zone = { id: string; kind: 'stage' | 'board' | 'desk'; x: number; y: number; w: number; h: number };
-export type Layout = { pos: Record<string, XY>; zones: Zone[]; board: { right: number; top: number } };
+// A board zone of a 'board' device has that device's id; the automatic board (no boards added) is 'zone:board'.
+export type Zone = { id: string; kind: 'stage' | 'board' | 'desk'; x: number; y: number; w: number; h: number; device?: string };
+export type Board = { id: string; left: number; right: number; top: number }; // id '' = the automatic board
+export type Layout = { pos: Record<string, XY>; zones: Zone[]; boards: Board[]; side?: boolean };
 
 const STAGE_GEAR = new Set<DeviceType>(['amp', 'cab', 'mic', 'namAmp', 'namRig']);
 const DESK_GEAR = new Set<DeviceType>(['input', 'output', 'power']);
@@ -20,6 +22,9 @@ export const ROW_H = 352; // pedal slot height including the gap to the next row
 const ROW_W = 1180; // usable board width
 const PAD = 32;
 const SLOT_GAP = 20;
+// Pedalboard sizes (catalog 'board' size), outside width.
+export const BOARD_W = [620, 960, 1244, 1560];
+const BOARD_GAP = 96;
 
 // Pedal enclosures, by what they're modelled on: a compact with a hinged plate, an MXR-style stomp,
 // a wide two-row box, a round fuzz, a TS-style rocker, a hammertone booster.
@@ -78,6 +83,7 @@ export function gearSize(d: Device): Size {
     case 'input': return { w: 148, h: 248 };
     case 'output': return { w: 224, h: 184 };
     case 'power': return { w: 336, h: 60 };
+    case 'board': return { w: BOARD_W[d.params.size] ?? BOARD_W[1], h: ROW_H + 60 + 2 * PAD };
     case 'splitter': return { w: 112, h: 140 };
     case 'joiner': return { w: 156, h: 176 };
     case 'wah': case 'volume': return { w: 124, h: 312 };
@@ -88,12 +94,26 @@ export function gearSize(d: Device): Size {
   }
 }
 
-export const isPedal = (d: Device) => !STAGE_GEAR.has(d.type) && !DESK_GEAR.has(d.type);
+export const isPedal = (d: Device) => !STAGE_GEAR.has(d.type) && !DESK_GEAR.has(d.type) && d.type !== 'board';
 export const zoneOf = (d: Device): Zone['kind'] => (STAGE_GEAR.has(d.type) ? 'stage' : isPedal(d) || d.type === 'power' ? 'board' : 'desk');
 
 const rowOf = (d: Device) => Math.max(0, Math.round(d.pos.board.y / ROW_H));
 
-export function layoutBoard(rig: Rig): Layout {
+// Stage above the boards suits a tall canvas; beside them, a wide one. Picks whichever the canvas
+// (width / height) shows bigger, so the rig fills the screen instead of floating in empty space.
+export function layoutFor(rig: Rig, aspect: number): Layout {
+  const fit = (l: Layout) => {
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    const grow = (x: number, y: number, w: number, h: number) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); };
+    for (const z of l.zones) grow(z.x, z.y, z.w, z.h);
+    for (const [id, p] of Object.entries(l.pos)) { const s = gearSize(rig.devices[id]); grow(p.x, p.y, s.w, s.h); }
+    return Math.min(aspect / (x1 - x0 || 1), 1 / (y1 - y0 || 1));
+  };
+  const above = layoutBoard(rig), beside = layoutBoard(rig, true);
+  return fit(beside) > fit(above) * 1.05 ? beside : above;
+}
+
+export function layoutBoard(rig: Rig, side = false): Layout {
   const devices = Object.values(rig.devices);
   const pos: Record<string, XY> = {};
   const byX = (a: Device, b: Device) => a.pos.board.x - b.pos.board.x || a.id.localeCompare(b.id);
@@ -141,40 +161,66 @@ export function layoutBoard(rig: Rig): Layout {
   }
   const stageW = Math.max(x - 64, 640);
 
-  // Pedalboard: slots fill right to left, a row at a time; a pedal can ask for a later row.
-  // The board is as wide as its fullest row (up to ROW_W), so it never looks half empty.
+  // Pedalboards, side by side under the stage: the first on the right, next to the guitar input,
+  // more to its left. Each board's slots fill right to left, a row at a time; a pedal can ask for a
+  // later row. With no boards added there's one automatic board as wide as its fullest row.
+  const boardDevs = devices.filter((d) => d.type === 'board').sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  const boardIds = boardDevs.length ? boardDevs.map((b) => b.id) : [''];
+  const home = (d: Device) => (d.board && boardIds.includes(d.board) ? d.board : boardIds[0]);
   const pedals = devices.filter(isPedal).sort((a, b) => rowOf(a) - rowOf(b) || b.pos.board.x - a.pos.board.x || a.id.localeCompare(b.id));
-  const widest = pedals.reduce((sum, p) => sum + gearSize(p).w + SLOT_GAP, -SLOT_GAP);
-  const boardW = Math.max(560, Math.min(ROW_W, widest)) + 2 * PAD;
-  const boardLeft = stageW / 2 - boardW / 2;
-  const boardRight = boardLeft + boardW;
+  const widthOf = (id: string) => {
+    if (id) return gearSize(rig.devices[id]).w;
+    const widest = pedals.reduce((sum, p) => sum + gearSize(p).w + SLOT_GAP, -SLOT_GAP);
+    return Math.max(560, Math.min(ROW_W, widest)) + 2 * PAD;
+  };
   const outputs = devices.filter((d) => d.type === 'output').length;
   const deskBottom = outputs ? 40 + outputs * 216 : 0;
-  const boardTop = Math.max(stageH, deskBottom) + 160; // below the stage and the desk
-  let row = 0;
-  let cursor = boardRight - PAD;
-  for (const p of pedals) {
-    const s = gearSize(p);
-    if (rowOf(p) > row) { row = rowOf(p); cursor = boardRight - PAD; }
-    if (cursor - s.w < boardLeft + PAD - 0.5 && cursor < boardRight - PAD) { row++; cursor = boardRight - PAD; }
-    pos[p.id] = { x: cursor - s.w, y: boardTop + PAD + row * ROW_H };
-    cursor -= s.w + SLOT_GAP;
+  const boardTop = side ? 0 : Math.max(stageH, deskBottom) + 160; // below the stage and the desk, or beside the stage
+  const total = boardIds.reduce((sum, id) => sum + widthOf(id) + BOARD_GAP, -BOARD_GAP);
+  const boards: Board[] = [];
+  const zones: Zone[] = [];
+  let right = side ? stageW + 48 + BOARD_GAP + total : stageW / 2 + total / 2;
+  for (const id of boardIds) {
+    const boardW = widthOf(id), boardLeft = right - boardW, boardRight = right;
+    let row = 0;
+    let cursor = boardRight - PAD;
+    const mine = pedals.filter((p) => home(p) === id);
+    for (const p of mine) {
+      const s = gearSize(p);
+      if (rowOf(p) > row) { row = rowOf(p); cursor = boardRight - PAD; }
+      if (cursor - s.w < boardLeft + PAD - 0.5 && cursor < boardRight - PAD) { row++; cursor = boardRight - PAD; }
+      pos[p.id] = { x: cursor - s.w, y: boardTop + PAD + row * ROW_H };
+      cursor -= s.w + SLOT_GAP;
+    }
+    const rows = mine.length ? row + 1 : 1;
+    const railY = boardTop + PAD + rows * ROW_H - 12;
+    devices.filter((d) => d.type === 'power' && home(d) === id).sort(byX)
+      .forEach((b, i) => { pos[b.id] = { x: boardLeft + PAD + i * (gearSize(b).w + 24), y: railY }; });
+    boards.push({ id, left: boardLeft, right: boardRight, top: boardTop });
+    zones.push({ id: id || 'zone:board', kind: 'board', x: boardLeft, y: boardTop, w: boardW, h: railY + 60 + PAD - boardTop, device: id || undefined });
+    right = boardLeft - BOARD_GAP;
   }
-  const rows = pedals.length ? row + 1 : 1;
-  const railY = boardTop + PAD + rows * ROW_H - 12;
-  const bricks = devices.filter((d) => d.type === 'power').sort(byX);
-  bricks.forEach((b, i) => { pos[b.id] = { x: boardLeft + PAD + i * (gearSize(b).w + 24), y: railY }; });
-  const boardH = railY + 60 + PAD - boardTop;
+  // Beside the stage, the boards sit on the floor: their bottom lines up with the stage's.
+  if (side) {
+    const dy = Math.max(0, stageH + 48 - Math.max(...zones.map((z) => z.y + z.h)));
+    for (const p of devices.filter((d) => isPedal(d) || d.type === 'power')) if (pos[p.id]) pos[p.id] = { x: pos[p.id].x, y: pos[p.id].y + dy };
+    for (const z of zones) z.y += dy;
+    for (const b of boards) b.top += dy;
+  }
+  const boardRight = boards[0].right;
 
   // Desk: interface left of the stage, guitar input right of the board.
   devices.filter((d) => d.type === 'output').sort(byX).forEach((d, i) => { pos[d.id] = { x: -360, y: 40 + i * 216 }; });
-  devices.filter((d) => d.type === 'input').sort(byX).forEach((d, i) => { pos[d.id] = { x: boardRight + 56, y: boardTop + 40 + i * 280 }; });
+  devices.filter((d) => d.type === 'input').sort(byX).forEach((d, i) => { pos[d.id] = { x: boardRight + 56, y: boards[0].top + 40 + i * 280 }; });
 
-  const zones: Zone[] = [{ id: 'zone:board', kind: 'board', x: boardLeft, y: boardTop, w: boardW, h: boardH }];
   if (stageH) zones.push({ id: 'zone:stage', kind: 'stage', x: -48, y: -48, w: stageW + 96, h: stageH + 96 });
   if (outputs) zones.push({ id: 'zone:desk', kind: 'desk', x: -392, y: 8, w: 288, h: outputs * 216 + 48 });
-  return { pos, zones, board: { right: boardRight, top: boardTop } };
+  return { pos, zones, boards, side };
 }
+
+// The board under (or nearest to) x on the board view.
+export const boardAt = (layout: Layout, x: number) =>
+  layout.boards.reduce((best, b) => (Math.max(b.left - x, x - b.right, 0) < Math.max(best.left - x, x - best.right, 0) ? b : best));
 
 // Where a dropped device should go: rewrite every zone-mate's hint to where it sits now, then put
 // the dropped one at the drop point, so the next layout reflows around it.
@@ -183,9 +229,11 @@ export function dropHints(rig: Rig, layout: Layout, id: string, dropped: XY): Re
   const hints: Record<string, XY> = {};
   const center = (dev: Device, p: XY): XY => ({ x: p.x + gearSize(dev).w / 2, y: p.y });
   if (isPedal(d)) {
+    const target = boardAt(layout, center(d, dropped).x);
     for (const p of Object.values(rig.devices).filter(isPedal)) {
       const c = center(p, p.id === id ? dropped : layout.pos[p.id]);
-      hints[p.id] = { x: c.x - layout.board.right, y: c.y - layout.board.top - PAD };
+      const b = p.id === id ? target : layout.boards.find((x) => x.left <= c.x && c.x <= x.right) ?? target;
+      hints[p.id] = { x: c.x - b.right, y: c.y - b.top - PAD };
     }
   } else if (d.type === 'amp' || d.type === 'cab') {
     for (const s of Object.values(rig.devices).filter((x) => x.type === 'amp' || x.type === 'cab')) {
@@ -206,7 +254,7 @@ export function dropHints(rig: Rig, layout: Layout, id: string, dropped: XY): Re
 export const TILE = { w: 148, h: 164, colGap: 56, rowGap: 32 };
 
 export function layoutGrid(rig: Rig): Record<string, XY> {
-  const shown = Object.values(rig.devices).filter((d) => d.type !== 'power');
+  const shown = Object.values(rig.devices).filter((d) => d.type !== 'power' && d.type !== 'board');
   const ids = new Set(shown.map((d) => d.id));
   const edges: [string, string][] = [];
   for (const c of rig.cables) {

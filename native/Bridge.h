@@ -78,9 +78,10 @@ public:
                 }
                 done ({});
             })
-            // Standalone tuner: tuner (open, inputChannel). While open, live events carry "__tuner": { hz }.
+            // Standalone tuner: tuner (open, inputChannel, mute). While open, live events carry "__tuner": { hz }.
             .withNativeFunction ("tuner", [this] (Args a, Done done) {
                 engine.tunerChannel = jmax (0, (int) a[1]);
+                engine.tunerMutes = a.size() < 3 || (bool) a[2];
                 engine.tuning = (bool) a[0];
                 done ({});
             })
@@ -115,7 +116,7 @@ public:
             .withNativeFunction ("t3kSignOut", [this] (Args, Done done) { t3k.signOut(); done (t3k.status()); })
             .withNativeFunction ("t3kSearch", [this] (Args a, Done done) { t3k.search (a[0], done); })
             .withNativeFunction ("t3kTone", [this] (Args a, Done done) { t3k.tone (a[0].toString(), done); })
-            .withNativeFunction ("t3kModels", [this] (Args a, Done done) { t3k.models (a[0].toString(), done); })
+            .withNativeFunction ("t3kModels", [this] (Args a, Done done) { t3k.models (a[0].toString(), a.size() > 1 ? a[1].toString() : String(), done); })
             .withNativeFunction ("t3kDownload", [this] (Args a, Done done) { t3k.download (a[0], a[1], done); });
     }
 
@@ -258,7 +259,6 @@ private:
             else if (auto* n = dynamic_cast<Nam*> (node.get()))
             {
                 d->setProperty ("missing", n->missing.load());
-                d->setProperty ("wrongRate", n->wrongRate.load());
             }
             else if (auto* l = dynamic_cast<Looper*> (node.get()))
             {

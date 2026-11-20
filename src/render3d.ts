@@ -54,6 +54,13 @@ function draw({ group, view, scale = 2 }: Model): Sprite | null {
   fill.position.set(1, -0.2, 0.8);
   scene.add(key, fill, new THREE.AmbientLight(0xffffff, 0.15), group);
   group.updateMatrixWorld(true);
+  // Metals ask for more of the room than the scene's dim default (models.ts shiny).
+  group.traverse((o) => {
+    for (const mat of [(o as THREE.Mesh).material].flat()) {
+      const m = mat as THREE.MeshStandardMaterial | undefined;
+      if (m?.userData?.env) { m.envMap = env; m.envMapIntensity = m.userData.env; }
+    }
+  });
 
   // Screen bounds of the sheared model: x' = x - z kx, y'(down) = -y - z ky.
   const box = new THREE.Box3().setFromObject(group);

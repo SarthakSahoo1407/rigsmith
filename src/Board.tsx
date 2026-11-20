@@ -5,7 +5,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 import {
-  BaseEdge, Controls, getBezierPath, getSmoothStepPath, Handle, Position, ReactFlow, useReactFlow,
+  BaseEdge, Controls, getBezierPath, getSmoothStepPath, Handle, NodeToolbar, Position, ReactFlow, useReactFlow,
   type Connection, type Edge, type EdgeProps, type Node, type NodeProps, type OnConnectEnd,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -15,15 +15,16 @@ import { CabStudio } from './CabStudio';
 import { Captures, DND_FILE } from './Captures';
 import type { Entry } from './library';
 import {
-  AMP_SWITCHES, AmpChannel, CaptureSelect, colorOf, credit, deviceName, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams,
+  AMP_SWITCHES, AmpChannel, CaptureSelect, colorOf, credit, deviceName, DirectSwitch, focusOnOpen, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams,
   readout, tapeName, Thumb, TunerScreen, useShot, type Edit, type Live,
 } from './gear';
 import { pedalboard } from './models';
+import { cpuText } from './native';
 import { spriteStyle, useSprite } from './render3d';
-import { cones, dropHints, micPlacementAt, gearSize, isPedal, layoutBoard, layoutGrid, MIC_HEAD, TILE, type Layout, type Zone } from './layout';
+import { boardAt, cones, dropHints, micPlacementAt, gearSize, isPedal, layoutFor, layoutGrid, MIC_HEAD, TILE, type Layout, type Zone } from './layout';
 import {
-  addDevice, cableAt, canConnect, connect, disconnect, insertIntoCable, isPowered, moveDevice, placeMic, powerUp,
-  removeDevice, replaceDevice, setFile, setParam, toggle, type Device, type FileRef, type JackRef, type Rig, type XY,
+  addDevice, cableAt, canConnect, connect, disconnect, hasPowerSwitch, insertIntoCable, isPowered, moveDevice, placeMic, powerUp,
+  removeDevice, replaceDevice, setBoard, setFile, setParam, toggle, type Device, type FileRef, type JackRef, type Rig, type XY,
 } from './rig';
 
 export type View = 'board' | 'grid';
@@ -42,6 +43,7 @@ export const GROUPS: [string, DeviceType[]][] = [
   ['Amp and cab', ['amp', 'cab', 'mic']],
   ['Neural captures', ['namAmp', 'namRig', 'namPedal']],
   ['Routing and power', ['splitter', 'joiner', 'power', 'input', 'output']],
+  ['Pedalboards', ['board']],
 ];
 const PEDAL_TYPES = GROUPS.slice(0, 6).flatMap(([, types]) => types);
 const DND = 'application/x-rigsmith-gear';
@@ -59,7 +61,7 @@ const ref = (device: string | null, jack: string | null | undefined): JackRef =>
 const jackKind = (rig: Rig, r: JackRef) => def(rig.devices[r.device].type).jacks.find((j) => j.name === r.jack)!.kind;
 const FIXED = new Set<DeviceType>(['input', 'output', 'power']); // their place on the board never changes
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const switchable = (d: Device) => !!def(d.type).footswitch || d.type === 'input';
+const switchable = (d: Device) => !!def(d.type).footswitch || d.type === 'input' || hasPowerSwitch(d.type);
 
 // Pedals take signal in on the right and out on the left, like real ones. The grid flows left to right.
 // On the board the amp's back panel (send, return, speaker) faces up, away from the player.
@@ -85,11 +87,12 @@ function toNodes(rig: Rig, view: View, prev: Node[], layout: Layout | null): Nod
       ...old.get(d.id), id: d.id, type: 'tile', data: {}, position: pos[d.id], draggable: false,
     }));
   }
+  // A board you added is its zone: click its name to select it, double-click to change it.
   const zones: Node[] = (layout?.zones ?? []).map((z) => ({
     id: z.id, type: 'zone', position: { x: z.x, y: z.y }, data: z, zIndex: -1,
-    draggable: false, selectable: false, deletable: false, focusable: false, connectable: false,
+    draggable: false, selectable: !!z.device, deletable: !!z.device, focusable: false, connectable: false,
   }));
-  const devices: Node[] = Object.values(rig.devices).map((d) => ({
+  const devices: Node[] = Object.values(rig.devices).filter((d) => d.type !== 'board').map((d) => ({
     ...old.get(d.id), id: d.id, type: 'device', data: {},
     position: layout ? layout.pos[d.id] : d.pos[view],
     draggable: !(layout && FIXED.has(d.type)),
@@ -161,14 +164,17 @@ function CableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, tar
   );
 }
 
-function ZoneNode({ data }: NodeProps) {
+function ZoneNode({ data, selected }: NodeProps) {
+  const { rig } = useContext(RigCtx);
   const z = data as Zone;
-  const name = { stage: 'Stage', board: 'Rigsmith Touring 32', desk: 'Desk' }[z.kind];
-  const board = useSprite(z.kind === 'board' ? `board:${z.w}x${z.h}` : null, () => pedalboard(z.w, z.h));
+  const dev = z.device ? rig.devices[z.device] : undefined;
+  const finish = dev?.params.finish ?? 0;
+  const name = dev ? `${makerOf('board', dev.params)} ${deviceName(dev).replace(/ board$/, '')}` : { stage: 'Stage', board: 'Rigsmith Touring 32', desk: 'Desk' }[z.kind];
+  const board = useSprite(z.kind === 'board' ? `board:${z.w}x${z.h}:${finish}` : null, () => pedalboard(z.w, z.h, finish));
   return (
-    <div className={`zone zone-${z.kind}${board ? ' shelled' : ''}`} style={{ width: z.w, height: z.h }}>
+    <div className={`zone zone-${z.kind}${board ? ' shelled' : ''}${selected ? ' selected' : ''}`} style={{ width: z.w, height: z.h }}>
       {board && <img className="shell" src={board.url} alt="" draggable={false} style={spriteStyle(board)} />}
-      <span className="zone-name">{name}</span>
+      <span className={`zone-name${dev ? ' board-label' : ''}`} title={dev ? 'Click to select, double-click to change, ⌫ to remove' : undefined}>{name}</span>
     </div>
   );
 }
@@ -283,7 +289,6 @@ function DeviceControls({ d }: { d: Device }) {
         <label className="field"><span>capture</span><CaptureSelect d={d} edit={edit} slot="model" kind="nam" label="Capture" />
           {d.files?.model && <span className="credit">{credit(d.files.model) || 'Your file'}</span>}
           {live[d.id]?.missing && <span className="inline-error">The capture file isn't on this Mac</span>}
-          {live[d.id]?.wrongRate && <span className="inline-error">This capture was made at 48 kHz: set your interface to 48 kHz</span>}
         </label>
       )}
       {d.type === 'input' && (
@@ -335,11 +340,12 @@ function DeviceControls({ d }: { d: Device }) {
         </div>
       )}
       {d.type === 'tuner' && <TunerScreen {...props} />}
+      {d.type === 'cab' && <DirectSwitch d={d} rig={rig} edit={edit} big />}
       {d.type === 'looper' && <LooperScreen {...props} />}
       {switchable(d) && d.type !== 'looper' && (
         <button className="bypass" aria-pressed={d.on} onClick={() => edit((r) => toggle(r, d.id))}>
           <span className={`led${(d.type === 'input' ? !d.on : d.on && powered) ? ' lit' : ''}`} />
-          {d.type === 'input' ? (d.on ? 'Mute input' : 'Muted') : d.on ? 'On' : 'Bypassed'}<kbd>B</kbd>
+          {d.type === 'input' ? (d.on ? 'Mute input' : 'Muted') : hasPowerSwitch(d.type) ? (d.on ? 'Power on' : 'Power off') : d.on ? 'On' : 'Bypassed'}<kbd>B</kbd>
         </button>
       )}
       {dd.power && !powered && (
@@ -371,6 +377,39 @@ function Head({ d, onClose }: { d: Device; onClose: () => void }) {
   );
 }
 
+// Swap a device for another of its kind, keeping its cables.
+function ReplaceSelect({ d, onReplaced }: { d: Device; onReplaced: (id: string) => void }) {
+  const { edit } = useContext(RigCtx);
+  const options = replacements(d);
+  if (!options.length) return null;
+  return (
+    <label className="field"><span><Replace size={14} strokeWidth={1.5} /> replace with</span>
+      <select value={options.findIndex((i) => sameItem(d, i))} onChange={(e) => {
+        const item = options[Number(e.target.value)];
+        let next = d.id;
+        edit((r) => {
+          const [rig, nid] = replaceDevice(r, d.id, item.type, itemParams(item));
+          next = nid;
+          return rig;
+        });
+        onReplaced(next);
+      }}>
+        {options.map((o, i) => <option key={`${o.type}:${o.variant}`} value={i}>{o.name}</option>)}
+      </select>
+    </label>
+  );
+}
+
+// A device's controls and Replace, outside the board (Live mode's editor).
+export function DeviceEditor({ d, rig, edit, live, inputs, onReplaced }: { d: Device; rig: Rig; edit: Edit; live: Live; inputs: string[]; onReplaced: (id: string) => void }) {
+  return (
+    <RigCtx.Provider value={{ rig, view: 'grid', edit, inputs, live, levels: { in: 0, out: 0, cpu: 0, ram: 0 } }}>
+      <DeviceControls d={d} />
+      <ReplaceSelect d={d} onReplaced={onReplaced} />
+    </RigCtx.Provider>
+  );
+}
+
 // Double-click: the device, big, with every control, plus Replace and Delete.
 function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => void; onReplaced: (id: string) => void }) {
   const ctx = useContext(RigCtx);
@@ -378,11 +417,9 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
   if (!d) return null;
   const size = gearSize(d);
   const k = Math.min(1.9, 540 / size.w, 600 / size.h); // fill the preview, leaving room for the rendered sides
-  const options = replacements(d);
-  const current = options.findIndex((i) => sameItem(d, i));
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label={tapeName(ctx.rig, d)}>
+      <div className="modal" role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label={tapeName(ctx.rig, d)}>
         <Head d={d} onClose={onClose} />
         <div className="modal-body">
           {d.type === 'cab' ? <CabStudio d={d} rig={ctx.rig} edit={ctx.edit} /> : (
@@ -395,23 +432,8 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
             </div>
           )}
           <div className="modal-side">
-            {d.type !== 'cab' && <DeviceControls d={d} />}
-            {options.length > 0 && (
-              <label className="field"><span><Replace size={14} strokeWidth={1.5} /> replace with</span>
-                <select value={current} onChange={(e) => {
-                  const item = options[Number(e.target.value)];
-                  let next = id;
-                  ctx.edit((r) => {
-                    const [rig, nid] = replaceDevice(r, id, item.type, itemParams(item));
-                    next = nid;
-                    return rig;
-                  });
-                  onReplaced(next);
-                }}>
-                  {options.map((o, i) => <option key={`${o.type}:${o.variant}`} value={i}>{o.name}</option>)}
-                </select>
-              </label>
-            )}
+            {d.type !== 'cab' ? <DeviceControls d={d} /> : <DirectSwitch d={d} rig={ctx.rig} edit={ctx.edit} big />}
+            <ReplaceSelect d={d} onReplaced={onReplaced} />
             <button className="remove" onClick={() => { ctx.edit((r) => removeDevice(r, id)); onClose(); }}>
               <Trash2 size={16} strokeWidth={1.5} />Delete <kbd>⌫</kbd>
             </button>
@@ -438,7 +460,7 @@ function Meter({ label, value }: { label: string; value: number }) {
 function Overview({ onPick }: { onPick: (id: string) => void }) {
   const { rig, edit, inputs, levels } = useContext(RigCtx);
   const pos = layoutGrid(rig);
-  const rows = signalOrder(rig).filter((d) => d.type !== 'power');
+  const rows = signalOrder(rig).filter((d) => d.type !== 'power' && d.type !== 'board');
   const unpowered = rows.filter((d) => !isPowered(rig, d.id));
   const noCab = rows.filter((d) => d.type === 'amp' && !cableAt(rig, { device: d.id, jack: 'speaker' }));
   const loose = rows.filter((d) => d.type === 'mic' && !d.mic);
@@ -448,7 +470,7 @@ function Overview({ onPick }: { onPick: (id: string) => void }) {
       <div className="ov-levels">
         <Meter label="In" value={levels.in} />
         <Meter label="Out" value={levels.out} />
-        <span className="readout">CPU {Math.round(levels.cpu * 100)}% · RAM {Math.round(levels.ram)} MB</span>
+        <span className="readout">CPU {cpuText(levels.cpu)}% · RAM {Math.round(levels.ram)} MB</span>
       </div>
       {unpowered.length > 0 && (
         <div className="notice">{unpowered.length} {unpowered.length === 1 ? 'pedal has' : 'pedals have'} no power
@@ -552,7 +574,22 @@ export function Board({ rig, view, edit, flash, inputs, live, levels, onSettings
   const [opened, setOpened] = useState<string>();
   const [dropCable, setDropCable] = useState<string>();
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('locker') === 'closed'; } catch { return false; } });
-  const layout = useMemo(() => (view === 'board' ? layoutBoard(rig) : null), [rig, view]);
+  // The canvas's shape picks the board layout that fills it best (stage above or beside the boards).
+  const [aspect, setAspect] = useState(16 / 10);
+  useEffect(() => {
+    const el = wrapper.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => e.contentRect.height && setAspect(Math.round((e.contentRect.width / e.contentRect.height) * 10) / 10));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // The layout only depends on what places and sizes gear, so a knob turn (or a pedal switched on)
+  // doesn't recompute it or rebuild the nodes: the key changes only when placement does.
+  const placement = JSON.stringify([
+    Object.values(rig.devices).map((d) => [d.id, d.type, d.params.size, d.params.speaker, d.params.model, d.params.finish, d.pos.board, d.board, d.mic]),
+    rig.cables.filter((c) => c.from.jack === 'speaker').map((c) => c.id),
+  ]);
+  const layout = useMemo(() => (view === 'board' ? layoutFor(rig, aspect) : null), [placement, view, aspect]);
   useEffect(() => setNodes((prev) => toNodes(rig, view, prev, layout)), [rig, view, layout]);
   useEffect(() => setEdges((prev) => toEdges(rig, prev, view)), [rig, view]);
   useEffect(() => { try { localStorage.setItem('locker', collapsed ? 'closed' : 'open'); } catch { /* private window */ } }, [collapsed]);
@@ -563,19 +600,23 @@ export function Board({ rig, view, edit, flash, inputs, live, levels, onSettings
   useEffect(() => {
     const t = setTimeout(() => flow.fitView({ padding: 0.06, duration: 250 }), 80);
     return () => clearTimeout(t);
-  }, [view, count, collapsed]);
+  }, [view, count, collapsed, aspect, layout?.side]);
 
   // Adds gear. Dropped on the board it takes that slot; dropped on a cable it goes into the cable.
   const add = (item: Item, at?: XY, cable?: string, file?: FileRef) => {
     let added = '';
     edit((r) => {
+      // The first board you add joins the automatic one, which becomes a real Touring 32 for the
+      // pedals already down, so adding a board always means one more.
+      if (item.type === 'board' && !Object.values(r.devices).some((x) => x.type === 'board')) r = addDevice(r, 'board', { x: 0, y: 0 })[0];
       let [next, id] = addDevice(r, item.type, boardHint(r, item.type));
       added = id;
       for (const [k, v] of Object.entries(itemParams(item))) next = setParam(next, id, k, v);
       if (file) next = setFile(next, id, 'model', file);
       if (at && view === 'board' && isPedal(next.devices[id])) {
-        const hints = dropHints(next, layoutBoard(next), id, { x: at.x - gearSize(next.devices[id]).w / 2, y: at.y });
-        for (const [hid, hint] of Object.entries(hints)) next = moveDevice(next, hid, 'board', hint);
+        const lay = layoutFor(next, aspect), x = at.x - gearSize(next.devices[id]).w / 2;
+        for (const [hid, hint] of Object.entries(dropHints(next, lay, id, { x, y: at.y }))) next = moveDevice(next, hid, 'board', hint);
+        next = setBoard(next, id, boardAt(lay, at.x).id || undefined);
       }
       if (cable) {
         try { next = insertIntoCable(next, cable, id); } catch (e) { flash(`${message(e)}; added it unplugged`); }
@@ -636,6 +677,19 @@ export function Board({ rig, view, edit, flash, inputs, live, levels, onSettings
     add(JSON.parse(raw) as Item, flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), cableAtPoint(e.clientX, e.clientY));
   };
 
+  // Deletes the selected device and any selected cables (⌫ or the red bin over the selection).
+  const removeSelected = () => {
+    const cables = edges.filter((x) => x.selected && rig.cables.some((c) => c.id === x.id)).map((x) => x.id);
+    if (!(selected && rig.devices[selected]) && !cables.length) return;
+    edit((r) => {
+      for (const id of cables) r = disconnect(r, id);
+      if (selected && r.devices[selected]) r = removeDevice(r, selected);
+      return r;
+    });
+    setSelected(undefined);
+    setOpened(undefined);
+  };
+
   // Keys that act on the selection or the board. App.tsx handles the global ones.
   const keys = useRef<(e: KeyboardEvent) => void>(undefined);
   keys.current = (e: KeyboardEvent) => {
@@ -644,6 +698,7 @@ export function Board({ rig, view, edit, flash, inputs, live, levels, onSettings
     if (e.key === 'Escape') { if (opened) setOpened(undefined); else setSelected(undefined); return; }
     if (e.key === '\\') { setCollapsed((c) => !c); return; }
     if (e.key === 'Enter' && d) { setOpened(d.id); return; }
+    if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); removeSelected(); return; }
     if (e.key.toLowerCase() === 'b' && d && switchable(d)) { edit((r) => toggle(r, d.id)); return; }
     if (e.key.toLowerCase() === 'p' && d) {
       if (!def(d.type).power) flash(`${deviceName(d)} needs no power`);
@@ -693,6 +748,7 @@ export function Board({ rig, view, edit, flash, inputs, live, levels, onSettings
         return r;
       }
       for (const [id, hint] of Object.entries(dropHints(r, layout!, d.id, node.position))) r = moveDevice(r, id, 'board', hint);
+      if (isPedal(d)) r = setBoard(r, d.id, boardAt(layout!, node.position.x + gearSize(d).w / 2).id || undefined);
       return r;
     });
     // On the board everything snaps back into its slot, even when the order didn't change.
@@ -722,16 +778,20 @@ export function Board({ rig, view, edit, flash, inputs, live, levels, onSettings
             onConnectEnd={onConnectEnd}
             onNodeDragStop={(_, node, dragged) => onDragStop(node, dragged)}
             onNodeClick={(_, node) => rig.devices[node.id] && setSelected(node.id)}
+            onEdgeClick={() => setSelected(undefined)}
             onNodeDoubleClick={(_, node) => rig.devices[node.id] && setOpened(node.id)}
             onPaneClick={() => setSelected(undefined)}
-            onDelete={({ nodes: ns, edges: es }) => edit((r) => {
-              for (const e of es) r = disconnect(r, e.id);
-              for (const n of ns) if (r.devices[n.id]) r = removeDevice(r, n.id);
-              return r;
-            })}
-            deleteKeyCode={['Backspace', 'Delete']}
+            deleteKeyCode={null}
+            noPanClassName="nodrag"
           >
             <Controls showInteractive={false} />
+            {selected && rig.devices[selected] && (
+              <NodeToolbar nodeId={selected} isVisible position={Position.Top} align="end" offset={10}>
+                <button className="trash" title="Delete (⌫)" aria-label={`Delete ${tapeName(rig, rig.devices[selected])}`} onClick={removeSelected}>
+                  <Trash2 size={15} strokeWidth={1.75} />
+                </button>
+              </NodeToolbar>
+            )}
           </ReactFlow>
         </div>
         {view === 'grid' && (inspected

@@ -105,13 +105,14 @@ export const DEFAULT_PRESET = 'Clean amp';
 // Captures on TONE3000 these presets use. Rigsmith never ships the files: loading a preset offers to
 // download them through the TONE3000 API, on the user's request, with the creator's name and license.
 // Titles are the creators' own.
-type Capture = { toneId: number; name: string; gear: string; author: string; url: string; license?: string };
+type Capture = { toneId: number; modelId?: number; name: string; gear: string; author: string; url: string; license?: string };
 const T3K = {
-  deluxe: { toneId: 104188, name: "Fender '62 Deluxe Amp - Bright Ch - 2026", gear: 'amp', author: 'outmodedelectronics', license: 't3k', url: 'https://www.tone3000.com/tones/fender-62-deluxe-amp-bright-ch-2026-104188' },
+  // Clean presets need captures that are clean at guitar level: the '62 Deluxe ones at V-7 were 33% THD at -30 dBFS in.
+  deluxe: { toneId: 6289, modelId: 53674, name: 'Fender Deluxe Reverb 1965 [Hyper Accuracy]', gear: 'amp', author: 'augctor', license: 't3k', url: 'https://www.tone3000.com/tones/fender-deluxe-reverb-1965-hyper-accuracy-6289' },
   badlander: { toneId: 82361, name: 'Mesa Badlander 50 - Crunch - Mesa 4x12 Load - Amp Head', gear: 'amp', author: 'outmodedelectronics', license: 't3k', url: 'https://www.tone3000.com/tones/mesa-badlander-50-crunch-mesa-4x12-load-amp-head-82361' },
   dualRec: { toneId: 26226, name: 'Mesa Dual Rectifer Multiwatt', gear: 'amp', author: 'StudioAmpCaptures', license: 't3k', url: 'https://www.tone3000.com/tones/mesa-dual-rectifer-multiwatt-26226' },
   dualRecRig: { toneId: 26225, name: 'Mesa Dual Rectifier Multiwatt Celestion V30', gear: 'amp-cab', author: 'StudioAmpCaptures', license: 't3k', url: 'https://www.tone3000.com/tones/mesa-dual-rectifier-multiwatt-celestion-v30-26225' },
-  deluxeRig: { toneId: 104183, name: "Fender '62 Deluxe - Bright Ch - SM57/M201 - 2026", gear: 'amp-cab', author: 'outmodedelectronics', url: 'https://www.tone3000.com/tones/fender-62-deluxe-bright-ch-sm57m201-2026-104183' },
+  deluxeRig: { toneId: 51649, modelId: 289461, name: "Deluxe Reverb '65 Reissue Clean", gear: 'amp-cab', author: 'gindabestari', license: 't3k', url: 'https://www.tone3000.com/tones/deluxe-reverb-65-reissue-clean-51649' },
   ts9: { toneId: 36827, name: 'Ibanez TS9 Tube Screamer', gear: 'pedal', author: 'StudioAmpCaptures', license: 't3k', url: 'https://www.tone3000.com/tones/ibanez-ts9-tube-screamer-36827' },
   mastotron: { toneId: 94478, name: 'ZVex Mastotron Fuzz', gear: 'pedal', author: 'outmodedelectronics', url: 'https://www.tone3000.com/tones/zvex-mastotron-fuzz-94478' },
   blade: { toneId: 36832, name: 'Fortin Blade Whitechapel Boost', gear: 'pedal', author: 'StudioAmpCaptures', url: 'https://www.tone3000.com/tones/fortin-blade-whitechapel-boost-36832' },
@@ -119,8 +120,10 @@ const T3K = {
 // Until it's downloaded, a capture's library id is a placeholder; library.ts resolve() finds the real
 // file by its tone.
 const fileOf = (c: Capture): FileRef => ({
-  id: `nam/t3k-${c.toneId}.nam`, name: c.name, kind: 'nam', source: 'tone3000', toneId: c.toneId, author: c.author, license: c.license, toneUrl: c.url, gear: c.gear,
+  id: `nam/t3k-${c.toneId}.nam`, name: c.name, kind: 'nam', source: 'tone3000', toneId: c.toneId, modelId: c.modelId, author: c.author, license: c.license, toneUrl: c.url, gear: c.gear,
 });
+// Every capture the built-in presets use, to download them all at once.
+export const PRESET_CAPTURES: FileRef[] = Object.values(T3K).map(fileOf);
 
 // Common shape: guitar → tuner → pedals → amp (or a NAM amp capture) → cab → mic(s) → interface,
 // effects optionally in the amp's loop. A NAM full-rig capture goes straight to the interface, as

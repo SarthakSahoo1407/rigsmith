@@ -70,10 +70,12 @@ public:
 
     void tone (const String& toneId, Done done) { api ("/tones/" + URL::addEscapeChars (toneId, true), {}, done); }
 
-    void models (const String& toneId, Done done)
+    // architecture: "" for A1 and custom models (the API's default), "2" for A2.
+    void models (const String& toneId, const String& architecture, Done done)
     {
         StringPairArray params;
         params.set ("tone_id", toneId);
+        if (architecture.isNotEmpty()) params.set ("architecture", architecture);
         params.set ("page_size", "100");
         api ("/models", params, done);
     }
@@ -82,15 +84,18 @@ public:
     void download (const var& tone, const var& model, Done done)
     {
         withToken ([tone, model] (const String& token) -> var {
-            const auto res = request (model["model_url"].toString(), "Authorization: Bearer " + token, {});
-            if (res.status != 200 || res.bytes.isEmpty()) return error ("Download failed (" + String (res.status) + ")");
+            const auto res = fetchFile (model["model_url"].toString(), token);
+            if (res.status != 200 || res.bytes.isEmpty())
+                return error ("Downloading " + tone["title"].toString() + " failed (" + (res.status ? "HTTP " + String (res.status) : String ("no connection")) + ")");
             const bool ir = tone["format"].toString() == "ir";
             const auto title = tone["title"].toString(), name = model["name"].toString();
-            const auto file = library::freshFile (ir ? "ir" : "nam", name.isEmpty() || name == title ? title : title + " - " + name, ir ? ".wav" : ".nam");
+            // The model's own name when it already says the tone ("TS9 Drive 0 Tone 7"), else both.
+            const auto full = name.isEmpty() || name == title ? title : name.startsWithIgnoreCase (title) ? name : title + " · " + name;
+            const auto file = library::freshFile (ir ? "ir" : "nam", full.replace (" · ", " - "), ir ? ".wav" : ".nam");
             if (! file.replaceWithData (res.bytes.getData(), res.bytes.getSize())) return error ("Couldn't save the file");
             const auto user = tone["user"];
             auto* meta = new DynamicObject();
-            meta->setProperty ("name", name.isEmpty() || name == title ? title : title + " · " + name);
+            meta->setProperty ("name", full);
             meta->setProperty ("source", "tone3000");
             meta->setProperty ("title", title);
             meta->setProperty ("toneId", tone["id"]);
@@ -131,6 +136,31 @@ private:
         if (auto s = u.createInputStream (opts)) s->readIntoMemoryBlock (r.bytes);
         return r;
     }
+    // A model file: TONE3000 may answer with a redirect to file storage. Follow it by hand, without
+    // the sign-in token, which storage hosts reject (and shouldn't see).
+    static Response fetchFile (const String& url, const String& token)
+    {
+        Response r;
+        StringPairArray headers;
+        auto opts = URL::InputStreamOptions (URL::ParameterHandling::inAddress)
+                        .withExtraHeaders ("Authorization: Bearer " + token)
+                        .withConnectionTimeoutMs (30000)
+                        .withNumRedirectsToFollow (0)
+                        .withResponseHeaders (&headers)
+                        .withStatusCode (&r.status);
+        if (auto s = URL (url).createInputStream (opts)) s->readIntoMemoryBlock (r.bytes);
+        if (r.status < 300 || r.status >= 400) return r;
+        String location;
+        for (const auto& k : headers.getAllKeys()) if (k.equalsIgnoreCase ("location")) location = headers[k];
+        if (location.isEmpty()) return r;
+        Response next;
+        auto plain = URL::InputStreamOptions (URL::ParameterHandling::inAddress).withConnectionTimeoutMs (30000).withStatusCode (&next.status);
+        if (location.startsWith ("/")) location = "https://" + URL (url).getDomain() + location;
+        if (auto s = URL (location).createInputStream (plain))
+            s->readIntoMemoryBlock (next.bytes);
+        return next;
+    }
+
     static var post (const String& path, const String& form) { return request (String (base) + path, {}, form).json(); }
 
     static var pollForToken (const String& key, const String& code, int interval, int expires)

@@ -4,23 +4,27 @@
 // the mics in front of them, seen from behind. Every piece carries its maker (catalog.ts makerOf).
 // A strip of gaffer tape marks duplicates and gear that has no power.
 
-import { createContext, useContext, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
-import { ampKnob, def, itemParams, makerOf, nameOf, VARIANTS, type DeviceType, type Item, type Param } from './catalog';
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
+import { ampKnob, captureName, def, isNam, itemParams, makerOf, nameOf, VARIANTS, type DeviceType, type Item, type Param } from './catalog';
 import { LICENSES, useLibrary } from './library';
 import { CAB_FOOT, cones, gearSize, MIC_HEAD, micsOn, shapeOf } from './layout';
 import {
-  ampShell, ampShot, cabShell, cabShot, darkBox, footswitch, jewel, knobBody, knobTop, micBehind, micStanding, pedalShell, pedalShot, speaker, steelShell,
+  pedalboard, ampShell, ampShot, cabShell, cabShot, darkBox, footswitch, jewel, knobBody, knobTop, micBehind, micStanding, pedalShell, pedalShot, speaker, steelShell,
   type Finish,
 } from './models';
 import { spriteStyle, useSprite, type Model } from './render3d';
 import { call } from './native';
-import { isPowered, placeMic, setFile, setParam, toggle, type Device, type Rig } from './rig';
+import { cableAt, isPowered, placeMic, setCabDirect, setFile, setParam, toggle, type Device, type Rig } from './rig';
 
 const maker = (d: Device) => makerOf(d.type, d.params);
 
+// Focuses a dialog when it opens. One stable function, so React calls it only on mount: an inline
+// ref runs again on every render (the meters re-render ~30 times a second) and steals focus from inputs.
+export const focusOnOpen = (el: HTMLElement | null) => { if (el && !el.contains(document.activeElement)) el.focus(); };
+
 export type Edit = (change: (rig: Rig) => Rig, group?: string) => void;
 // Live readouts from the engine, by device id: tuner pitch, looper state, gate open/closed.
-export type Live = Record<string, { hz?: number; mode?: string; length?: number; position?: number; open?: boolean; missing?: boolean; wrongRate?: boolean }>;
+export type Live = Record<string, { hz?: number; mode?: string; length?: number; position?: number; open?: boolean; missing?: boolean }>;
 type Props = { d: Device; rig: Rig; edit: Edit; inputs: string[]; live: Live };
 
 const fmt = (p: Param, v: number) => (p.options ? p.options[v] : String(Number(v.toFixed(p.max - p.min > 20 ? 0 : 2))));
@@ -29,7 +33,8 @@ const label = (name: string) => LABELS[name] ?? name;
 const UNITS: Record<string, string> = { time: ' ms', predelay: ' ms', release: ' ms', attack: ' ms', decay: ' s', threshold: ' dB', makeup: ' dB', detune: ' ct', interval: ' st', trim: ' dB', reference: ' Hz', lowCut: ' Hz', highCut: ' Hz', angle: '°', align: ' ms', input: ' dB', output: ' dB', voltage: '%' };
 export const readout = (p: Param, v: number) => fmt(p, v) + (p.options ? '' : (UNITS[p.name] ?? ''));
 
-export const deviceName = (d: Device) => nameOf(d.type, d.params);
+// A NAM block is called by its capture; everything else by the product it is.
+export const deviceName = (d: Device) => (isNam(d.type) && d.files?.model ? captureName(d.files.model.name) : nameOf(d.type, d.params));
 
 // The name on the tape: "Tape Echo", or "Tape Echo 2" when the rig has more than one.
 export function tapeName(rig: Rig, d: Device) {
@@ -147,7 +152,7 @@ export function GearDefs() {
       <defs>
         {radial('k-black', [[0, '#4a4a4d'], [0.55, '#151516'], [1, '#050505']])}
         {radial('k-black-top', [[0, '#3a3a3c'], [1, '#121213']])}
-        {radial('k-chrome', [[0, '#ffffff'], [0.35, '#d9dade'], [0.7, '#8f9196'], [1, '#e4e5e8']])}
+        {radial('k-chrome', [[0, '#ffffff'], [0.3, '#eceef1'], [0.55, '#6c6e74'], [0.78, '#f4f5f7'], [1, '#9a9ca1']])}
         {radial('k-chrome-top', [[0, '#ffffff'], [0.6, '#c8c9cd'], [1, '#9a9ca1']])}
         {radial('k-cream', [[0, '#fffdf6'], [0.6, '#e9e1cb'], [1, '#b9ad8e']])}
         {radial('k-gold', [[0, '#fff2c4'], [0.5, '#d6b25c'], [1, '#8a6a26']])}
@@ -266,19 +271,45 @@ const isLight = (hex: string) => {
   return 0.299 * r + 0.587 * g + 0.114 * b > 150;
 };
 
-const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+export const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+
+// Pitch against A4 = `reference` Hz: the nearest note and how far off it is in cents.
+export function pitchOf(hz: number, reference = 440) {
+  if (!hz) return undefined;
+  const n = 12 * Math.log2(hz / reference) + 69;
+  return { note: NOTES[((Math.round(n) % 12) + 12) % 12], cents: (n - Math.round(n)) * 100 };
+}
+// How close: green in tune (±3), yellow close (±10), orange off (±25), red far off.
+export const tuneColor = (cents: number) => (Math.abs(cents) <= 3 ? 'green' : Math.abs(cents) <= 10 ? 'yellow' : Math.abs(cents) <= 25 ? 'orange' : 'red');
+
+// Eases a jittery reading toward its target every frame, so a needle glides instead of jumping.
+export function useSmoothed(target: number, k = 0.22) {
+  const [v, setV] = useState(target);
+  const cur = useRef(target);
+  useEffect(() => {
+    let raf = 0;
+    const step = () => {
+      const next = cur.current + (target - cur.current) * k;
+      cur.current = Math.abs(target - next) < 0.05 ? target : next;
+      setV(cur.current);
+      if (cur.current !== target) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, k]);
+  return v;
+}
 
 export function TunerScreen({ d, live }: Props) {
-  const hz = live[d.id]?.hz ?? 0;
-  if (!d.on) return <div className="screen off">stomp to tune</div>;
-  if (!hz) return <div className="screen"><b>–</b><div className="cents" /></div>;
-  const n = 12 * Math.log2(hz / d.params.reference) + 69;
-  const cents = Math.round((n - Math.round(n)) * 100);
+  const pitch = d.on ? pitchOf(live[d.id]?.hz ?? 0, d.params.reference) : undefined;
+  const cents = useSmoothed(pitch ? Math.max(-50, Math.min(50, pitch.cents)) : 0);
+  if (!d.on) return <div className="screen off">stomp to tune · {d.params.mode ? 'bypass' : 'mute'}</div>;
+  if (!pitch) return <div className="screen"><b>–</b><div className="cents" /><small>A4 = {Math.round(d.params.reference)} Hz</small></div>;
   return (
-    <div className={`screen${Math.abs(cents) <= 3 ? ' in-tune' : ''}`} aria-live="polite">
-      <b>{NOTES[((Math.round(n) % 12) + 12) % 12]}</b>
+    <div className={`screen tune-${tuneColor(pitch.cents)}`} aria-live="polite">
+      <b>{pitch.note}</b>
       <div className="cents"><i style={{ left: `${50 + cents}%` }} /></div>
-      <small>{cents > 0 ? '+' : ''}{cents} cents</small>
+      <small>{pitch.cents > 0 ? '+' : ''}{Math.round(pitch.cents)} cents</small>
     </div>
   );
 }
@@ -346,7 +377,11 @@ function Pedal(props: Props) {
         )}
         {plates.map((p) => <ModelPlate key={p.name} d={d} edit={edit} name={p.name} />)}
         {d.type === 'namPedal' && <CaptureSelect d={d} edit={edit} slot="model" kind="nam" label="Capture" />}
-        <div className="pedal-knobs">{knobs(props, 'pedal', (p) => !p.name.endsWith('Hz'))}</div>
+        <div className="pedal-knobs">{knobs(props, 'pedal', (p) => !p.name.endsWith('Hz') && !(d.type === 'tuner' && p.name === 'mode'))}</div>
+        {d.type === 'tuner' && (
+          <button className={`mini-toggle nodrag${d.params.mode ? ' up' : ''}`} aria-pressed={!!d.params.mode} title="While tuning: mute the output, or keep hearing it (bypass)"
+            onClick={() => edit((r) => setParam(r, d.id, 'mode', d.params.mode ? 0 : 1))}><i />{d.params.mode ? 'bypass' : 'mute'}</button>
+        )}
         {d.type === 'tuner' && <TunerScreen {...props} />}
         {looper && <LooperScreen {...props} />}
       </div>
@@ -357,7 +392,7 @@ function Pedal(props: Props) {
         </>
       ) : (
         <>
-          <div className={`pedal-name${look.upper ? ' upper' : ''}`} style={{ fontFamily: look.font }}>{d.type === 'namPedal' ? d.files?.model?.name ?? 'NAM' : deviceName(d)}</div>
+          <div className={`pedal-name${look.upper ? ' upper' : ''}${deviceName(d).length > 18 ? ' long' : ''}`} style={{ fontFamily: look.font }} title={deviceName(d)}>{deviceName(d)}</div>
           <div className="pedal-maker">{maker(d)}</div>
           {shape === 'screamer'
             ? <button className="rocker-switch nodrag" {...stomp}><span /></button>
@@ -405,22 +440,30 @@ function Treadle(props: Props) {
 const PANEL_TOP = new Set([0, 1, 2, 8]);
 const AMP_CAP = ['black', 'chicken', 'chicken', 'gold', 'gold', 'black', 'chrome', 'cream', 'black'];
 
+// The power rocker on an amp's panel: off, the amp passes nothing (rig.ts hasPowerSwitch).
+function PowerSwitch({ d, edit }: Pick<Props, 'd' | 'edit'>) {
+  return (
+    <button className={`power-switch nodrag${d.on ? ' on' : ''}`} aria-pressed={d.on} aria-label={`Power ${d.on ? 'on' : 'off'}`} title={`Power ${d.on ? 'on' : 'off'} (B)`}
+      onClick={() => edit((r) => toggle(r, d.id))}><i /><span>{d.on ? 'on' : 'off'}</span></button>
+  );
+}
+
 function Amp(props: Props) {
   const { rig, d, edit } = props;
   const m = d.params.model;
-  const loaded = rig.cables.some((c) => c.from.device === d.id && c.from.jack === 'speaker');
+  const loaded = d.on && rig.cables.some((c) => c.from.device === d.id && c.from.jack === 'speaker');
   const size = gearSize(d);
   const [shell, shelled] = useShell(`amp:${m}:${size.w}x${size.h}`, () => ampShell(size.w, size.h, m));
   return (
     <FinishCtx.Provider value={AMP_CAP[m] as Finish}>
-    <div className={`amp m${m}${PANEL_TOP.has(m) ? ' panel-top' : ''} cap-${AMP_CAP[m]}${shelled}`}>
+    <div className={`amp m${m}${PANEL_TOP.has(m) ? ' panel-top' : ''} cap-${AMP_CAP[m]}${shelled}${d.on ? '' : ' off'}`}>
       {shell}
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <span className="amp-handle" />
       <div className="amp-face">
         <div className="amp-grille">
           <span className="amp-plate"><b>{maker(d)}</b><i>{deviceName(d)}</i></span>
-          {!loaded && <span className="warn">no load: cable a cab</span>}
+          {!d.on ? <span className="warn">power off</span> : !loaded && <span className="warn">no load: cable a cab</span>}
         </div>
         <div className="amp-panel">
           <AmpChannel {...props} />
@@ -432,7 +475,7 @@ function Amp(props: Props) {
             ))}
           </div>
           <div className="amp-power">
-            <span className="toggle" title="Power" /><span className="toggle" title="Standby" />
+            <PowerSwitch d={d} edit={edit} />
             <Jewel lit={loaded} />
           </div>
         </div>
@@ -503,21 +546,20 @@ function NamHead(props: Props) {
   const [shell, shelled] = useShell(`amp:6:${size.w}x${size.h}`, () => ampShell(size.w, size.h, 6));
   return (
     <FinishCtx.Provider value="chrome">
-    <div className={`amp nam-head cap-chrome${shelled}`}>
+    <div className={`amp nam-head cap-chrome${shelled}${d.on ? '' : ' off'}`}>
       {shell}
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <span className="amp-handle" />
       <div className="amp-face">
         <div className="amp-grille">
-          <span className="amp-plate"><b>{f ? f.name : 'Neural capture'}</b><i>{d.type === 'namRig' ? 'NAM full rig' : 'NAM amp'}{f && credit(f) ? ` · ${credit(f)}` : ''}</i></span>
-          {state?.missing && <span className="warn">capture file missing</span>}
-          {!state?.missing && state?.wrongRate && <span className="warn">set the interface to 48 kHz</span>}
-          {!loaded && <span className="warn">no load: cable a cab</span>}
+          <span className="amp-plate"><b>{f ? captureName(f.name) : 'Neural capture'}</b><i>{d.type === 'namRig' ? 'NAM full rig' : 'NAM amp'}{f && credit(f) ? ` · ${credit(f)}` : ''}</i></span>
+          {!d.on ? <span className="warn">power off</span> : state?.missing ? <span className="warn">capture file missing</span>
+            : !loaded && <span className="warn">no load: cable a cab</span>}
         </div>
         <div className="amp-panel">
           <CaptureSelect d={d} edit={edit} slot="model" kind="nam" label="Capture" />
           <div className="amp-knobs">{knobs(props, 'amp')}</div>
-          <div className="amp-power"><Jewel lit={loaded && !!f && !state?.missing} /></div>
+          <div className="amp-power"><PowerSwitch d={d} edit={edit} /><Jewel lit={d.on && loaded && !!f && !state?.missing} /></div>
         </div>
       </div>
       <TapeIf rig={rig} d={d} className="on-top" />
@@ -552,7 +594,8 @@ function Cab(props: Props) {
           </div>
         </div>
         <div className="cab-row">
-          {mics.length === 0 && <span className="cab-spk">drag a mic onto the cab</span>}
+          <DirectSwitch d={d} rig={rig} edit={edit} />
+          {mics.length === 0 && !cableAt(rig, { device: d.id, jack: 'direct' }) && <span className="cab-spk">drag a mic on, or go direct</span>}
           {mics.map((m) => (
             <label key={m.id} className="cab-mic">{tapeName(rig, m)}
               <select className="nodrag" value={m.params.model} onChange={(e) => edit((r) => setParam(r, m.id, 'model', Number(e.target.value)))}>
@@ -564,6 +607,18 @@ function Cab(props: Props) {
       </div>
       <TapeIf rig={rig} d={d} className="on-top" />
     </div>
+  );
+}
+
+// Direct out: the cab straight to the interface, no mic (rig.ts setCabDirect).
+export function DirectSwitch({ d, rig, edit, big }: Pick<Props, 'd' | 'rig' | 'edit'> & { big?: boolean }) {
+  const on = !!cableAt(rig, { device: d.id, jack: 'direct' });
+  return (
+    <button className={`${big ? 'bypass' : 'mini-toggle direct'} nodrag${on ? ' up' : ''}`} aria-pressed={on}
+      title={on ? 'Direct to the interface, no mic. Click to go back to the mics' : 'Send the cab straight to the interface, without mics'}
+      onClick={() => edit((r) => setCabDirect(r, d.id, !on))}>
+      {big ? <><span className={`led${on ? ' lit' : ''}`} />{on ? 'Direct out (no mics)' : 'Mics'}</> : <><i />direct</>}
+    </button>
   );
 }
 
@@ -763,6 +818,13 @@ function SteelBox(props: Props) {
   );
 }
 
+// A pedalboard on its own, for its device window.
+function BoardArt({ d }: Props) {
+  const size = gearSize(d);
+  const [shell, shelled] = useShell(`board:${size.w}x${size.h}:${d.params.finish}`, () => pedalboard(size.w, size.h, d.params.finish));
+  return <div className={`board-art${shelled}`}>{shell}</div>;
+}
+
 export function Gear(props: Props) {
   switch (props.d.type) {
     case 'amp': return <Amp {...props} />;
@@ -774,6 +836,7 @@ export function Gear(props: Props) {
     case 'power': return <Brick {...props} />;
     case 'splitter': case 'joiner': return <SteelBox {...props} />;
     case 'wah': case 'volume': return <Treadle {...props} />;
+    case 'board': return <BoardArt {...props} />;
     default: return <Pedal {...props} />;
   }
 }
@@ -808,7 +871,7 @@ export function Thumb({ item }: { item: Item }) {
 
 // A small rendered picture of the whole thing, for the gear list, grid tiles and Live mode.
 export const useShot = (type: DeviceType, params: Record<string, number>) => {
-  const key = `${type}:${['model', 'speaker', 'size'].map((k) => params[k] ?? '').join(':')}`;
+  const key = `${type}:${['model', 'speaker', 'size', 'finish'].map((k) => params[k] ?? '').join(':')}`;
   return useSprite(`shot:${key}`, () => shotOf(type, params));
 };
 function shotOf(type: DeviceType, params: Record<string, number>): Model {
@@ -822,6 +885,7 @@ function shotOf(type: DeviceType, params: Record<string, number>): Model {
     case 'output': return { ...darkBox(size.w, size.h, 40), scale: 0.7 };
     case 'power': return { ...darkBox(size.w, size.h, 24), scale: 0.6 };
     case 'wah': case 'volume': return { ...pedalShell('stomp', size.w, size.h, '#1b1b1c', true), scale: 0.7 };
+    case 'board': return { ...pedalboard(size.w, size.h, params.finish ?? 0), scale: 0.25 };
     default: {
       const shape = shapeOf(type, params);
       const look = LOOKS[`${type}${params.model ?? ''}`] ?? LOOKS[type] ?? { cap: 'black' };

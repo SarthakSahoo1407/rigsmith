@@ -86,16 +86,20 @@ const cloth = (a: string, b: string) => canvasTexture(`cloth${a}${b}`, 32, (g, s
 }, 10, true);
 
 // ---- Materials ----
-const paint = (color: string, flake = 0.15) =>
-  new THREE.MeshPhysicalMaterial({ color, roughness: 0.38, metalness: flake, clearcoat: 1, clearcoatRoughness: 0.1 });
-const chrome = () => new THREE.MeshStandardMaterial({ color: 0xe9eaec, metalness: 1, roughness: 0.12 });
-const nickel = () => new THREE.MeshStandardMaterial({ color: 0xb9bbbf, metalness: 1, roughness: 0.3 });
+// `userData.env` asks render3d for that much room reflection (the scene default is dim, for tolex and
+// paper). Chrome is a mirror: near-zero roughness and a strong reflection, so it reads as plated metal
+// with bright highlights and dark bands, not grey plastic. Paint is metal-flake under a hard clear coat.
+const shiny = <M extends THREE.Material>(m: M, env: number) => { m.userData.env = env; return m; };
+const paint = (color: string, flake = 0.35) =>
+  shiny(new THREE.MeshPhysicalMaterial({ color, roughness: 0.32, metalness: flake, clearcoat: 1, clearcoatRoughness: 0.03 }), 1.3);
+const chrome = () => shiny(new THREE.MeshStandardMaterial({ color: 0xf6f7f9, metalness: 1, roughness: 0.04 }), 2.6);
+const nickel = () => shiny(new THREE.MeshStandardMaterial({ color: 0xd2d4d8, metalness: 1, roughness: 0.14 }), 2);
 const plastic = (color = '#121213', roughness = 0.42) => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
 const rubber = () => new THREE.MeshStandardMaterial({ color: 0x0d0d0e, roughness: 0.85 });
 const tolex = (color: string) => color === 'tweed'
   ? new THREE.MeshStandardMaterial({ map: TWEED(), roughness: 0.82, bumpMap: TWEED(), bumpScale: 0.6 })
   : new THREE.MeshStandardMaterial({ color, roughness: 0.86, bumpMap: TOLEX(), bumpScale: 1.4 });
-const brushed = (color: string) => new THREE.MeshStandardMaterial({ color, metalness: 1, roughness: 0.42, roughnessMap: BRUSHED(), bumpMap: BRUSHED(), bumpScale: 0.3 });
+const brushed = (color: string) => shiny(new THREE.MeshStandardMaterial({ color, metalness: 1, roughness: 0.3, roughnessMap: BRUSHED(), bumpMap: BRUSHED(), bumpScale: 0.3 }), 1.6);
 
 // ---- Shapes and solids ----
 // A rounded rectangle, top-left at (x, y) in board coordinates (y down), as a three shape (y up).
@@ -160,7 +164,7 @@ const PEDAL_DEPTH = 46;
 export function pedalShell(shape: Shape, w: number, h: number, color: string, treadle = false): Model {
   const round = shape === 'round';
   const mat = treadle ? new THREE.MeshStandardMaterial({ color: '#1b1b1c', roughness: 0.7, bumpMap: WRINKLE(), bumpScale: 1.5 })
-    : shape === 'hammered' ? new THREE.MeshStandardMaterial({ color: '#c3c7cc', metalness: 0.9, roughness: 0.3, bumpMap: HAMMER(), bumpScale: 2 })
+    : shape === 'hammered' ? shiny(new THREE.MeshStandardMaterial({ color: '#d4d7db', metalness: 1, roughness: 0.18, bumpMap: HAMMER(), bumpScale: 2 }), 2)
     : paint(color);
   const body = slab(w, h, shape === 'compact' ? 12 : 9, treadle ? 58 : PEDAL_DEPTH, round ? 10 : 6, mat, round);
   // Jacks on the right side, where the light catches their nuts.
@@ -202,8 +206,8 @@ const FINISH: Record<Finish, () => { body: Mat; top: Mat; mark: Mat; ribs: boole
   chicken: () => ({ body: plastic('#141415', 0.5), top: plastic('#1b1b1d', 0.28), mark: plastic('#f2f2f2', 0.4), ribs: true }),
   chrome: () => ({ body: chrome(), top: chrome(), mark: plastic('#111'), ribs: false }),
   cream: () => ({ body: plastic('#e8dfc6', 0.45), top: plastic('#efe7d0', 0.3), mark: plastic('#1a1a1a'), ribs: true }),
-  gold: () => ({ body: new THREE.MeshStandardMaterial({ color: '#d4b060', metalness: 1, roughness: 0.25 }),
-    top: new THREE.MeshStandardMaterial({ color: '#e2c47a', metalness: 1, roughness: 0.18 }), mark: plastic('#111'), ribs: true }),
+  gold: () => ({ body: shiny(new THREE.MeshStandardMaterial({ color: '#d4b060', metalness: 1, roughness: 0.12 }), 2.2),
+    top: shiny(new THREE.MeshStandardMaterial({ color: '#e2c47a', metalness: 1, roughness: 0.08 }), 2.2), mark: plastic('#111'), ribs: true }),
 };
 export function knobBody(finish: Finish, view: 'floor' | 'stand'): Model {
   const f = FINISH[finish]();
@@ -281,7 +285,7 @@ export function speaker(r: number, kind: number): Model {
   const paper = new THREE.MeshStandardMaterial({ color: look.cone, roughness: 0.9, bumpMap: RINGS(), bumpScale: 3 });
   RINGS().repeat.set(1, 7);
   const c = r;
-  const rim = lathe(c, c, [[r * 0.93, -r * 0.02], [r * 0.95, 0], [r, 0], [r, -r * 0.05]], new THREE.MeshStandardMaterial({ color: '#3a3b3e', metalness: 0.8, roughness: 0.4 }), 96);
+  const rim = lathe(c, c, [[r * 0.93, -r * 0.02], [r * 0.95, 0], [r, 0], [r, -r * 0.05]], shiny(new THREE.MeshStandardMaterial({ color: '#4a4b4f', metalness: 1, roughness: 0.25 }), 1.6), 96);
   const surround = new Mesh(new THREE.TorusGeometry(r * 0.9, r * 0.05, 16, 96), rubber());
   surround.position.set(c, -c, -r * 0.06);
   const cone = lathe(c, c, [[r * 0.31, -r * 0.36], [r * 0.5, -r * 0.24], [r * 0.7, -r * 0.13], [r * 0.86, -r * 0.07]], paper, 96);
@@ -298,7 +302,7 @@ function micParts(model: number) {
   const parts: THREE.Object3D[] = [];
   const meshMat = new THREE.MeshStandardMaterial({ map: MESH(), metalness: 0.7, roughness: 0.35 });
   if (model === 1) { // ribbon: a bronze slotted box
-    const bronze = new THREE.MeshStandardMaterial({ color: '#b48a52', metalness: 1, roughness: 0.32 });
+    const bronze = shiny(new THREE.MeshStandardMaterial({ color: '#b48a52', metalness: 1, roughness: 0.18 }), 2);
     parts.push(slab(34, 40, 12, 26, 5, bronze));
     parts[0].position.set(-17, 20, 0);
     for (const y of [-12, -4, 4, 12]) { const slot = new Mesh(new THREE.BoxGeometry(24, 2, 1), plastic('#1c140b')); slot.position.set(0, y, 0.4); parts.push(slot); }
@@ -306,7 +310,7 @@ function micParts(model: number) {
   } else if (model === 2) { // condenser: big mesh capsule, silver body, gold dot
     const head = new Mesh(new THREE.SphereGeometry(16, 48, 24), meshMat);
     head.scale.set(1, 1.2, 0.9);
-    parts.push(head, cyl(0, 0, 12, 12.5, 12, 98, new THREE.MeshStandardMaterial({ color: '#d7d9dd', metalness: 1, roughness: 0.22 })));
+    parts.push(head, cyl(0, 0, 12, 12.5, 12, 98, shiny(new THREE.MeshStandardMaterial({ color: '#e4e6ea', metalness: 1, roughness: 0.08 }), 2.4)));
   } else { // dynamic: slim grille, tapered black body, chrome tail
     parts.push(lathe(0, 0, [[0, -4], [5, -3.4], [7.4, 0], [7.6, 18]], meshMat), cyl(0, 0, 7.6, 8.6, 18, 21, nickel()),
       cyl(0, 0, 8.6, 10.6, 21, 98, plastic('#1d1e21', 0.35)));
@@ -397,9 +401,22 @@ export function cabShot(speakerKind: number, w = 460, h = 340): Model {
 
 // ---- The pedalboard: aluminium rails with velcro, end caps, on the floor ----
 const VELCRO = () => canvasTexture('velcro', 64, noise(220, 13), 12);
-export function pedalboard(w: number, h: number): Model {
+const WOOD = () => canvasTexture('wood', 256, (g, s) => {
+  g.fillStyle = '#5a3720'; g.fillRect(0, 0, s, s);
+  const r = rand(21);
+  for (let y = 0; y < s; y += 1 + r() * 3) {
+    g.strokeStyle = `rgba(${r() > 0.5 ? '30,15,6' : '140,90,50'},${0.15 + r() * 0.25})`;
+    g.lineWidth = 0.5 + r() * 1.5;
+    g.beginPath(); g.moveTo(0, y);
+    for (let x = 0; x <= s; x += 16) g.lineTo(x, y + Math.sin(x / 40 + y) * 2);
+    g.stroke();
+  }
+}, 180, true);
+// Finishes: black powder coat, raw aluminium, walnut.
+export function pedalboard(w: number, h: number, finish = 0): Model {
   const parts: THREE.Object3D[] = [];
-  const metal = new THREE.MeshStandardMaterial({ color: '#2a2b2e', metalness: 0.85, roughness: 0.42, bumpMap: BRUSHED(), bumpScale: 0.2 });
+  const metal = finish === 2 ? new THREE.MeshStandardMaterial({ map: WOOD(), roughness: 0.55, bumpMap: WOOD(), bumpScale: 0.4 })
+    : shiny(new THREE.MeshStandardMaterial({ color: finish === 1 ? '#c8cbd0' : '#2a2b2e', metalness: 1, roughness: finish === 1 ? 0.2 : 0.38, bumpMap: BRUSHED(), bumpScale: 0.2 }), finish === 1 ? 1.8 : 1.2);
   for (const x of [0, w - 22]) parts.push(slab(22, h, 8, 70, 4, metal));
   const rail = 60, gap = 12;
   for (let y = 10; y + rail <= h - 6; y += rail + gap) {

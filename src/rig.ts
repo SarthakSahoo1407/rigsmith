@@ -18,6 +18,7 @@ export type Device = {
   mic?: MicPlacement;
   ir?: string; // v1 field, unused
   files?: Record<string, FileRef>; // library files by slot: NAM devices "model", cabs "irA" / "irB"
+  board?: string; // the pedalboard a pedal or power supply sits on (a 'board' device); none = the first board
 };
 // A capture or IR in the library (native Library.h). `id` is "<kind>/<file name>"; the rest is shown
 // to the user. Files from TONE3000 keep their creator, license and links, and the tone to fetch
@@ -62,7 +63,7 @@ export function removeDevice(rig: Rig, id: string): Rig {
   const devices: Record<string, Device> = {};
   for (const d of Object.values(rig.devices)) {
     if (d.id === id) continue;
-    devices[d.id] = d.mic?.cab === id ? { ...d, mic: undefined } : d; // its mics fall off
+    devices[d.id] = d.mic?.cab === id ? { ...d, mic: undefined } : d.board === id ? { ...d, board: undefined } : d; // its mics and pedals fall off
   }
   return { ...rig, devices, cables: rig.cables.filter((c) => c.from.device !== id && c.to.device !== id) };
 }
@@ -92,6 +93,10 @@ export function setParam(rig: Rig, id: string, name: string, value: number): Rig
   return update(rig, id, { params: { ...rig.devices[id].params, [name]: v } });
 }
 
+// Puts a pedal or power supply on a pedalboard (undefined: the first board).
+export const setBoard = (rig: Rig, id: string, board: string | undefined): Rig =>
+  rig.devices[id].board === board || (board && rig.devices[board]?.type !== 'board') ? rig : update(rig, id, { board });
+
 export const setFile = (rig: Rig, id: string, slot: string, file: FileRef | undefined): Rig => {
   const files = { ...rig.devices[id].files };
   if (file) files[slot] = file; else delete files[slot];
@@ -117,6 +122,30 @@ export function powerUp(rig: Rig, id: string): Rig {
   const [next, supply] = addDevice(rig, 'power', { x: 0, y: 0 });
   return connect(next, { device: supply, jack: '1' }, { device: id, jack: 'dc' });
 }
+
+// A cab straight to the interface with no mic (its Direct jack), or back to its mics. Direct takes the
+// interface jack the cab's mics fed (L by default); switching back puts the mics on whichever jack it used.
+export function setCabDirect(rig: Rig, cab: string, direct: boolean): Rig {
+  const out = Object.values(rig.devices).find((d) => d.type === 'output');
+  if (!out) throw new Error('Add an Output (interface) first');
+  const L = { device: out.id, jack: 'L' }, R = { device: out.id, jack: 'R' };
+  const mics = Object.values(rig.devices).filter((m) => m.mic?.cab === cab).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  if (direct) {
+    const fed = rig.cables.filter((c) => c.to.device === out.id && (c.from.device === cab || mics.some((m) => m.id === c.from.device)));
+    const target = fed.find((c) => c.to.jack === 'L')?.to ?? fed[0]?.to ?? L;
+    rig = unplug(rig, ...fed.map((c) => c.to));
+    return connect(rig, { device: cab, jack: 'direct' }, target);
+  }
+  const target = cableAt(rig, { device: cab, jack: 'direct' })?.to ?? L;
+  rig = unplug(rig, { device: cab, jack: 'direct' });
+  if (mics.length === 1) return connect(rig, { device: mics[0].id, jack: 'out' }, target);
+  if (mics.length > 1 && target.jack === 'L') return connect(connect(rig, { device: cab, jack: 'outL' }, L), { device: cab, jack: 'outR' }, R);
+  if (mics.length > 1) return connect(rig, { device: cab, jack: 'outL' }, target);
+  return rig;
+}
+
+// Amps have a power switch (Device.on): an amp that's off passes nothing, like the real thing.
+export const hasPowerSwitch = (type: DeviceType) => type === 'amp' || type === 'namAmp' || type === 'namRig';
 
 export const isPowered = (rig: Rig, id: string) =>
   !def(rig.devices[id].type).power || !!cableAt(rig, { device: id, jack: 'dc' });
@@ -231,9 +260,9 @@ function endpoint(d: Device, jack: string) {
 }
 
 export function compile(rig: Rig): Compiled {
-  // Unpowered pedals and power supplies drop out of the audio path entirely.
+  // Unpowered pedals, power supplies and amps switched off drop out of the audio path entirely.
   const live = Object.values(rig.devices).filter(
-    (d) => isPowered(rig, d.id) && def(d.type).jacks.some((j) => j.kind !== 'power'),
+    (d) => isPowered(rig, d.id) && def(d.type).jacks.some((j) => j.kind !== 'power') && !(hasPowerSwitch(d.type) && !d.on),
   );
   const isLive = new Set(live.map((d) => d.id));
   const out: Compiled = { nodes: [], wires: [] };
@@ -291,6 +320,7 @@ export function parseRig(text: string): Rig {
 
   let rig = emptyRig();
   const mics: [string, MicPlacement][] = [];
+  const boards: [string, string][] = [];
   for (const [id, d] of Object.entries<any>(raw.devices)) {
     if (!/^[\w-]{1,64}$/.test(id) || d?.id !== id) throw new Error(`Bad device id: ${id.slice(0, 64)}`);
     if (typeof d.type !== 'string' || !Object.hasOwn(CATALOG, d.type)) throw new Error(`Unknown device type in ${id}`);
@@ -302,9 +332,11 @@ export function parseRig(text: string): Rig {
     const files = parseFiles(d.files);
     if (files) rig.devices[id].files = files;
     for (const p of def(type).params) rig = setParam(rig, id, p.name, num(d.params?.[p.name], p.def));
+    if (typeof d.board === 'string') boards.push([id, d.board]);
     if (d.mic) mics.push([id, { cab: String(d.mic.cab), x: num(d.mic.x), y: num(d.mic.y), distance: num(d.mic.distance) }]);
   }
   for (const [id, at] of mics) rig = placeMic(rig, id, at);
+  for (const [id, board] of boards) rig = setBoard(rig, id, board);
   for (const c of raw.cables) {
     const ref = (r: any): JackRef => ({ device: String(r?.device), jack: String(r?.jack) });
     rig = connect(rig, ref(c?.from), ref(c?.to));

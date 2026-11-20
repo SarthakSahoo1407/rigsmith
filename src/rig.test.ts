@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { DeviceType } from './catalog';
 import {
   addDevice, canConnect, commit, compile, connect, emptyRig, history, insertIntoCable, isPowered, parseRig,
-  placeMic, powerUp, redo, removeDevice, replaceDevice, setFile, setParam, toggle, undo, type Rig,
+  placeMic, powerUp, redo, removeDevice, replaceDevice, setCabDirect, setFile, setParam, toggle, undo, type Rig,
 } from './rig';
+import { cpuText } from './native';
 
 const at = { x: 0, y: 0 };
 const j = (device: string, jack: string) => ({ device, jack });
@@ -134,6 +135,48 @@ describe('compile', () => {
     rig = connect(rig, j('input-1', 'out'), j('amp-1', 'in'));
     rig = connect(rig, j('amp-1', 'speaker'), j('cab-1', 'in'));
     expect(wires(rig).filter((w) => w.startsWith('cab-1'))).toEqual([]);
+  });
+});
+
+describe('amp power and cab direct out', () => {
+  const rigWithMics = (n: number) => {
+    let [rig] = build('input', 'amp', 'cab', 'output', ...Array<DeviceType>(n).fill('mic'));
+    rig = connect(rig, j('input-1', 'out'), j('amp-1', 'in'));
+    rig = connect(rig, j('amp-1', 'speaker'), j('cab-1', 'in'));
+    for (let k = 1; k <= n; k++) rig = placeMic(rig, `mic-${k}`, { cab: 'cab-1', x: 0.3, y: 0.5, distance: 0.1 });
+    if (n === 1) rig = connect(rig, j('mic-1', 'out'), j('output-1', 'L'));
+    if (n > 1) rig = connect(connect(rig, j('cab-1', 'outL'), j('output-1', 'L')), j('cab-1', 'outR'), j('output-1', 'R'));
+    return rig;
+  };
+
+  it('an amp switched off passes nothing', () => {
+    const rig = toggle(rigWithMics(1), 'amp-1');
+    expect(compile(rig).nodes.some((n) => n.id.startsWith('amp-1'))).toBe(false);
+    expect(wires(rig).some((w) => w.includes('amp-1'))).toBe(false);
+  });
+
+  it('direct out sends the cab to the interface with no mic, and back again', () => {
+    for (const mics of [0, 1, 2]) {
+      const before = rigWithMics(mics);
+      const direct = setCabDirect(before, 'cab-1', true);
+      expect(wires(direct)).toContain('cab-1/spk:0>output-1:0');
+      expect(wires(direct).some((w) => w.startsWith('mic-') && w.includes('output-1'))).toBe(false);
+      expect(wires(direct).some((w) => w.startsWith('cab-1/mix') && w.includes('output-1'))).toBe(false);
+      const back = setCabDirect(direct, 'cab-1', false);
+      expect(wires(back).filter((w) => w.includes('output-1'))).toEqual(wires(before).filter((w) => w.includes('output-1')));
+    }
+  });
+
+  it('direct out takes the side the cab fed in a two-amp rig', () => {
+    let [rig] = build('amp', 'cab', 'mic', 'output');
+    rig = connect(rig, j('amp-1', 'speaker'), j('cab-1', 'in'));
+    rig = placeMic(rig, 'mic-1', { cab: 'cab-1', x: 0.3, y: 0.5, distance: 0.1 });
+    rig = connect(rig, j('mic-1', 'out'), j('output-1', 'R'));
+    expect(wires(setCabDirect(rig, 'cab-1', true))).toContain('cab-1/spk:0>output-1:1');
+  });
+
+  it('CPU reads as two digits, 00 to 99', () => {
+    expect([0, 0.05, 0.1, 0.994, 1.5].map(cpuText)).toEqual(['00', '05', '10', '99', '99']);
   });
 });
 
@@ -341,20 +384,32 @@ describe('built-in presets', async () => {
   });
 });
 
+describe('board layout fits the canvas', async () => {
+  const { PRESETS } = await import('./presets');
+  const { layoutFor } = await import('./layout');
+  it('wide canvases put the stage beside the boards, tall ones above', () => {
+    const rig = PRESETS['Clean amp'].build();
+    expect(layoutFor(rig, 3).side).toBe(true);
+    expect(layoutFor(rig, 0.6).side).toBe(false);
+  });
+});
+
 describe('board layout', async () => {
   const { PRESETS } = await import('./presets');
   const { layoutBoard, gearSize } = await import('./layout');
   it.each(Object.keys(PRESETS))('%s: every device placed, nothing overlaps', (name) => {
     const rig = PRESETS[name].build();
-    const { pos } = layoutBoard(rig);
-    const boxes = Object.values(rig.devices).map((d) => ({ id: d.id, ...pos[d.id], ...gearSize(d) }));
-    for (const b of boxes) expect(Number.isFinite(b.x) && Number.isFinite(b.y), b.id).toBe(true);
-    for (const a of boxes)
-      for (const b of boxes)
-        if (a.id < b.id && rig.devices[a.id].mic?.cab !== b.id && rig.devices[b.id].mic?.cab !== a.id) { // a mic stands on its cab's face
-          const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
-          expect(apart, `${a.id} overlaps ${b.id}`).toBe(true);
-        }
+    for (const side of [false, true]) {
+      const { pos } = layoutBoard(rig, side);
+      const boxes = Object.values(rig.devices).map((d) => ({ id: d.id, ...pos[d.id], ...gearSize(d) }));
+      for (const b of boxes) expect(Number.isFinite(b.x) && Number.isFinite(b.y), b.id).toBe(true);
+      for (const a of boxes)
+        for (const b of boxes)
+          if (a.id < b.id && rig.devices[a.id].mic?.cab !== b.id && rig.devices[b.id].mic?.cab !== a.id) { // a mic stands on its cab's face
+            const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+            expect(apart, `${a.id} overlaps ${b.id}${side ? ' (beside)' : ''}`).toBe(true);
+          }
+    }
   });
 
   it('keeps signal order right to left on the board', async () => {
@@ -396,5 +451,64 @@ describe('grid layout', async () => {
   it('a splitter opens a second row', () => {
     const pos = layoutGrid(PRESETS['Dual amp stereo'].build());
     expect(pos['amp-1'].y).not.toBe(pos['amp-2'].y);
+  });
+});
+
+describe('several pedalboards', async () => {
+  const { boardAt, dropHints, gearSize, layoutBoard } = await import('./layout');
+  const { setBoard } = await import('./rig');
+  const inside = (rig: Rig, id: string, zone: { x: number; w: number }) => {
+    const x = layoutBoard(rig).pos[id].x;
+    return x >= zone.x && x + gearSize(rig.devices[id]).w <= zone.x + zone.w;
+  };
+  const twoBoards = () => {
+    let [rig] = build('input', 'distortion', 'delay', 'reverb', 'board', 'board', 'power');
+    rig = setBoard(setBoard(rig, 'delay-1', 'board-2'), 'reverb-1', 'board-2');
+    return rig;
+  };
+
+  it('lays out each board with its own pedals, the first on the right', () => {
+    const rig = twoBoards();
+    const { zones, boards } = layoutBoard(rig);
+    const [first, second] = zones.filter((z) => z.kind === 'board');
+    expect([first.device, second.device]).toEqual(['board-1', 'board-2']);
+    expect(second.x + second.w).toBeLessThan(first.x);
+    expect(inside(rig, 'distortion-1', first)).toBe(true);
+    expect(inside(rig, 'delay-1', second) && inside(rig, 'reverb-1', second)).toBe(true);
+    expect(boards.map((b) => b.id)).toEqual(['board-1', 'board-2']);
+  });
+
+  it('a drop picks the board under it; no boards means the automatic one', () => {
+    const rig = twoBoards();
+    const lay = layoutBoard(rig);
+    const second = lay.boards[1];
+    expect(boardAt(lay, (second.left + second.right) / 2).id).toBe('board-2');
+    expect(boardAt(lay, second.left - 5000).id).toBe('board-2'); // nearest
+    const hints = dropHints(rig, lay, 'distortion-1', { x: second.left + 40, y: second.top + 40 });
+    expect(hints['distortion-1'].x).toBeLessThan(0); // relative to its new board's right edge
+    const [plain] = build('input', 'distortion');
+    expect(layoutBoard(plain).boards.map((b) => b.id)).toEqual(['']);
+  });
+
+  it('keeps boards in the rig file, ignores them in the engine, and frees pedals of a removed board', () => {
+    const rig = twoBoards();
+    const back = parseRig(JSON.stringify(rig));
+    expect(back.devices['delay-1'].board).toBe('board-2');
+    expect(compile(back).nodes.some((n) => n.type === 'board')).toBe(false);
+    const gone = removeDevice(back, 'board-2');
+    expect(gone.devices['delay-1'].board).toBeUndefined();
+    expect(setBoard(back, 'delay-1', 'distortion-1').devices['delay-1'].board).toBe('board-2'); // only onto a board
+    const bad = JSON.parse(JSON.stringify(rig));
+    bad.devices['delay-1'].board = 'nowhere';
+    expect(parseRig(JSON.stringify(bad)).devices['delay-1'].board).toBeUndefined();
+  });
+});
+
+describe('capture names', async () => {
+  const { captureName } = await import('./catalog');
+  it('drops a tone title said twice, keeps everything else', () => {
+    expect(captureName('Ibanez TS9 Tube Screamer · Ibanez TS9 Tube Screamer Drive 0 Tone 7 Level 7')).toBe('Ibanez TS9 Tube Screamer Drive 0 Tone 7 Level 7');
+    expect(captureName('Plexi · Bright channel')).toBe('Plexi · Bright channel');
+    expect(captureName('My capture')).toBe('My capture');
   });
 });

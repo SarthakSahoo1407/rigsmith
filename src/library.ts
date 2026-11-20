@@ -1,6 +1,7 @@
 // The capture library on this Mac (native Library.h) and the TONE3000 connection, as one small
 // store the gear list, the device slots and preset loading all read.
 
+import { captureName } from './catalog';
 import { useSyncExternalStore } from 'react';
 import { call, inApp, on } from './native';
 import type { FileRef, Rig } from './rig';
@@ -26,7 +27,7 @@ export const useLibrary = () => useSyncExternalStore((l) => { listeners.add(l); 
 export async function refresh() {
   if (!inApp) return;
   const [entries, t3k] = await Promise.all([call<Entry[]>('library'), call<T3kStatus>('t3kStatus')]);
-  set({ entries: entries.sort((a, b) => a.name.localeCompare(b.name)), t3k, loaded: true });
+  set({ entries: entries.map((e) => ({ ...e, name: captureName(e.name) })).sort((a, b) => a.name.localeCompare(b.name)), t3k, loaded: true });
 }
 if (inApp) {
   refresh();
@@ -49,7 +50,12 @@ export const setKey = async (key: string) => { await call('set', 't3kKey', key);
 
 export const search = (q: { query?: string; gears?: string; format?: string; page?: number }) =>
   call<{ data: Tone[]; total_pages?: number } | Failure>('t3kSearch', q);
-export const models = (toneId: number) => call<{ data: Model[] } | Failure>('t3kModels', String(toneId));
+// A tone's models of every architecture: TONE3000 lists A2 models only when asked for them.
+export async function models(toneId: number): Promise<{ data: Model[] } | Failure> {
+  const [a1, a2] = await Promise.all(['', '2'].map((arch) => call<{ data: Model[] } | Failure>('t3kModels', String(toneId), arch)));
+  if (failed(a1) && failed(a2)) return a1;
+  return { data: [...(failed(a1) ? [] : a1.data ?? []), ...(failed(a2) ? [] : a2.data ?? [])] };
+}
 export const tone = (toneId: number | string) => call<Tone | Failure>('t3kTone', String(toneId));
 export async function download(t: Tone, m: Model): Promise<Entry | Failure> {
   const r = await call<Entry | Failure>('t3kDownload', t, m);
