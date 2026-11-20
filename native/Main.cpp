@@ -53,6 +53,17 @@ private:
         .withNativeFunction ("getState", [this] (const Array<var>&, auto complete) { complete (state()); })
         .withNativeFunction ("set", [this] (const Array<var>& a, auto complete) { set (a[0].toString(), a[1]); complete ({}); })
         .withNativeFunction ("setRig", [this] (const Array<var>& a, auto complete) { engine.setRig (a[0]); complete ({}); })
+        // Looper buttons: looper (deviceId, "main" | "stop" | "undo" | "clear").
+        .withNativeFunction ("looper", [this] (const Array<var>& a, auto complete) {
+            const auto it = engine.nodes().find (a[0].toString());
+            if (auto* l = it != engine.nodes().end() ? dynamic_cast<rig::Looper*> (it->second.get()) : nullptr)
+            {
+                const auto cmd = a[1].toString();
+                l->command = cmd == "main" ? rig::Looper::Main : cmd == "stop" ? rig::Looper::Stop
+                           : cmd == "undo" ? rig::Looper::Undo : cmd == "clear" ? rig::Looper::Clear : rig::Looper::None;
+            }
+            complete ({});
+        })
         .withNativeFunction ("openAudioSettings", [this] (const Array<var>&, auto complete) { openAudioSettings(); complete ({}); })
         // Rig storage. The UI validates rig JSON (parseRig); this side only moves text.
         .withNativeFunction ("listRigs", [] (const Array<var>&, auto complete) { complete (listRigs()); })
@@ -179,6 +190,37 @@ private:
         o->setProperty ("cpu", deviceManager.getCpuUsage());
         web.emitEventIfBrowserIsVisible ("meter", var (o));
         engine.collectGarbage();
+        if (++ticks % 3 == 0)
+            web.emitEventIfBrowserIsVisible ("live", live());
+    }
+
+    int ticks = 0;
+
+    // Tuner pitch and looper state, ten times a second: { deviceId: {hz} | {mode, length, position} }.
+    var live()
+    {
+        auto* o = new DynamicObject();
+        for (const auto& [id, node] : engine.nodes())
+        {
+            auto* d = new DynamicObject();
+            if (auto* t = dynamic_cast<rig::Tuner*> (node.get()))
+                d->setProperty ("hz", t->on ? t->detect() : 0.0f);
+            else if (auto* l = dynamic_cast<rig::Looper*> (node.get()))
+            {
+                const auto sr = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() : 48000.0;
+                static const char* modes[] = { "empty", "recording", "playing", "overdubbing", "stopped" };
+                d->setProperty ("mode", modes[jlimit (0, 4, l->modeOut.load())]);
+                d->setProperty ("length", l->lengthOut / sr);
+                d->setProperty ("position", l->positionOut / sr);
+            }
+            else
+            {
+                delete d;
+                continue;
+            }
+            o->setProperty (id, var (d));
+        }
+        return o;
     }
 
     // Serves the built React UI from Rig.app/Contents/Resources/ui.

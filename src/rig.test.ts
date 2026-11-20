@@ -196,7 +196,7 @@ describe('rig files', () => {
 describe('built-in presets', async () => {
   const { PRESETS } = await import('./presets');
   it.each(Object.keys(PRESETS))('%s builds, round-trips and reaches the output', (name) => {
-    const rig = PRESETS[name]();
+    const rig = PRESETS[name].build();
     expect(parseRig(JSON.stringify(rig))).toEqual(rig);
     const { wires } = compile(rig);
     const reached = new Set(['input-1']);
@@ -205,5 +205,42 @@ describe('built-in presets', async () => {
       for (const w of wires) if (reached.has(w.from) && !reached.has(w.to)) { reached.add(w.to); grew = true; }
     }
     expect(reached).toContain('output-1');
+  });
+});
+
+describe('board layout', async () => {
+  const { PRESETS } = await import('./presets');
+  const { layoutBoard, gearSize } = await import('./layout');
+  it.each(Object.keys(PRESETS))('%s: every device placed, nothing overlaps', (name) => {
+    const rig = PRESETS[name].build();
+    const { pos } = layoutBoard(rig);
+    const boxes = Object.values(rig.devices).map((d) => ({ id: d.id, ...pos[d.id], ...gearSize(d) }));
+    for (const b of boxes) expect(Number.isFinite(b.x) && Number.isFinite(b.y), b.id).toBe(true);
+    for (const a of boxes)
+      for (const b of boxes)
+        if (a.id < b.id) {
+          const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+          expect(apart, `${a.id} overlaps ${b.id}`).toBe(true);
+        }
+  });
+
+  it('keeps signal order right to left on the board', async () => {
+    const rig = PRESETS['Blues crunch'].build();
+    const { pos } = layoutBoard(rig);
+    expect(pos['tuner-1'].x).toBeGreaterThan(pos['compressor-1'].x);
+    expect(pos['compressor-1'].x).toBeGreaterThan(pos['distortion-1'].x);
+  });
+
+  it('a dropped pedal takes the slot it was dropped on', async () => {
+    const { dropHints } = await import('./layout');
+    const { moveDevice } = await import('./rig');
+    let rig = PRESETS['Blues crunch'].build();
+    const layout = layoutBoard(rig);
+    // Drop the tuner just left of the distortion.
+    const at = { x: layout.pos['distortion-1'].x - 60, y: layout.pos['distortion-1'].y };
+    for (const [id, hint] of Object.entries(dropHints(rig, layout, 'tuner-1', at))) rig = moveDevice(rig, id, 'board', hint);
+    const after = layoutBoard(rig).pos;
+    expect(after['tuner-1'].x).toBeLessThan(after['distortion-1'].x);
+    expect(after['compressor-1'].x).toBeGreaterThan(after['distortion-1'].x);
   });
 });

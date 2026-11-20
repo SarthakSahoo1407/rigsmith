@@ -4,69 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rig</title>
-    <style>
-      :root { color-scheme: dark; --bg: #16161a; --panel: #222228; --line: #3a3a44; --fg: #e8e8ec; --dim: #9a9aa6; --ok: #4ade80; --warn: #facc15; --bad: #ef4444; }
-      html, body, #root { height: 100%; margin: 0; }
-      body { background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
-      select, button, input { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
-      input[type=range] { padding: 0; border: 0; background: none; width: 80px; }
-      button { cursor: pointer; }
-      button:disabled { opacity: .4; cursor: default; }
-      button[aria-pressed=true] { background: var(--line); }
-      .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
-      .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
-      .group { display: flex; gap: 6px; align-items: center; }
-      .spacer { flex: 1; }
-      .inline { display: flex; gap: 6px; align-items: center; }
-      .workspace { display: grid; grid-template-columns: 150px 1fr; min-height: 0; }
-      .palette { overflow-y: auto; padding: 4px 8px 12px; border-right: 1px solid var(--line); background: var(--panel); }
-      .palette h3 { font-size: 11px; color: var(--dim); font-weight: 600; margin: 12px 0 4px; }
-      .palette button { display: block; width: 100%; text-align: left; margin-bottom: 3px; }
-      .canvas { min-height: 0; }
-      .meter { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
-      .meter.small { width: 80px; }
-      .meter > div { height: 100%; background: var(--ok); }
-      .led { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
-      .led.on { background: var(--bad); }
-      .banner { background: var(--warn); color: #000; padding: 10px 16px; margin: 16px; border-radius: 8px; }
-      .dim { color: var(--dim); }
-      .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #000d; border: 1px solid var(--line); padding: 8px 14px; border-radius: 6px; z-index: 10; }
-
-      .device { min-width: 110px; padding: 8px 12px; display: grid; gap: 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
-      .device.board { --c: #3f3f46; background: var(--c); border: 2px solid color-mix(in srgb, var(--c), #fff 25%); box-shadow: 0 4px 10px #0008; }
-      .device.board.cat-routing { --c: #334155; }
-      .device.board.cat-dynamics { --c: #14532d; }
-      .device.board.cat-drive { --c: #7f1d1d; }
-      .device.board.cat-filter { --c: #713f12; }
-      .device.board.cat-modulation { --c: #1e3a8a; }
-      .device.board.cat-time { --c: #4c1d95; }
-      .device.board.cat-amp { --c: #292524; }
-      .device.grid { border-left: 4px solid var(--line); }
-      .device.off { opacity: .65; }
-      .device-head { font-weight: 600; }
-      .device-head small { color: var(--dim); font-weight: 400; margin-left: 4px; }
-      .knobs { display: flex; flex-wrap: wrap; gap: 8px; max-width: 240px; }
-      .knob { display: grid; justify-items: center; gap: 2px; font-size: 9px; color: var(--dim); cursor: ns-resize; }
-      .knob select { font-size: 10px; padding: 2px 4px; cursor: pointer; }
-      .knob svg { width: 28px; height: 28px; }
-      .knob-body { fill: #111; stroke: #666; stroke-width: 1.5; }
-      .knob-mark { stroke: #fff; stroke-width: 2.5; stroke-linecap: round; }
-      .knob:focus-visible { outline: 2px solid var(--ok); border-radius: 4px; }
-      .footswitch { display: flex; gap: 6px; align-items: center; justify-content: center; font-size: 11px; }
-      .led-dot { width: 8px; height: 8px; border-radius: 50%; background: #444; }
-      .led-dot.lit { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
-      .warn { color: var(--warn); font-size: 11px; }
-      .hint { color: var(--dim); font-size: 11px; }
-      .react-flow__handle { width: 12px; height: 12px; border: 2px solid #111; }
-      .react-flow__handle span { position: absolute; font-size: 9px; color: var(--fg); white-space: nowrap; pointer-events: none; }
-      /* Jack labels sit outside the box so they never cover knobs. */
-      .react-flow__handle span { color: var(--dim); }
-      .react-flow__handle-left span { right: 14px; top: -2px; }
-      .react-flow__handle-right span { left: 14px; top: -2px; }
-      .react-flow__handle-top span { bottom: 12px; left: 50%; transform: translateX(-50%); }
-      .react-flow__handle-bottom span { top: 12px; left: 50%; transform: translateX(-50%); }
-      .hidden-handle { opacity: 0; pointer-events: none; }
-    </style>
   </head>
   <body>
     <div id="root"></div>

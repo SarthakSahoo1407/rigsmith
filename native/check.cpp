@@ -50,8 +50,130 @@ static var rigJson (const char* text) { return JSON::parse (String (text)); }
 
 static bool near (float a, float b, float tol = 0.005f) { return std::abs (a - b) < tol; }
 
+
+// Renders one node directly over `in` (one vector per input jack) and returns its outputs.
+static std::vector<std::vector<float>> renderNode (rig::Node& node, const std::vector<std::vector<float>>& in)
+{
+    const int len = (int) in[0].size();
+    std::vector<std::vector<float>> out ((size_t) std::max (1, node.numOuts), std::vector<float> ((size_t) len));
+    std::vector<float> mix ((size_t) N);
+    rig::IO io;
+    io.mixL = io.mixR = mix.data();
+    for (int s = 0; s < len; s += N)
+    {
+        std::vector<const float*> ip;
+        std::vector<float*> op;
+        for (auto& v : in) ip.push_back (v.data() + s);
+        for (auto& v : out) op.push_back (v.data() + s);
+        node.process (ip.data(), op.data(), std::min (N, len - s), io);
+    }
+    return out;
+}
+
+static std::shared_ptr<rig::Node> make (const char* type, const std::vector<float>& params)
+{
+    auto node = rig::makeNode (type);
+    size_t i = 0;
+    for (float v : params) node->p[i++] = v;
+    node->prepareNode (SR, N);
+    return node;
+}
+
+static std::vector<float> sine (float hz, float amp, int len)
+{
+    std::vector<float> v ((size_t) len);
+    for (int i = 0; i < len; ++i) v[(size_t) i] = amp * (float) std::sin (MathConstants<double>::twoPi * hz * i / SR);
+    return v;
+}
+
+static float rms (const std::vector<float>& v, int from = 0)
+{
+    double s = 0;
+    for (size_t i = (size_t) from; i < v.size(); ++i) s += v[i] * v[i];
+    return (float) std::sqrt (s / double (v.size() - (size_t) from));
+}
+
+static void checkDevices()
+{
+    const int second = (int) SR;
+
+    { // Delay: one echo 100 ms after the dry impulse.
+        auto d = make ("delay", { 100, 0, 10, 1, 0 });
+        std::vector<float> imp ((size_t) second / 5);
+        imp[0] = 1;
+        auto out = renderNode (*d, { imp });
+        int at = 1;
+        for (int i = 1; i < (int) out[0].size(); ++i) if (std::abs (out[0][(size_t) i]) > std::abs (out[0][(size_t) at])) at = i;
+        CHECK (std::abs (at - second / 10) <= 1);
+        CHECK (near (out[1][(size_t) at], out[0][(size_t) at], 1e-7f)); // plain delay: same echo on both sides
+    }
+    { // Gate: shuts out hiss below the threshold, passes playing above it.
+        auto g = make ("gate", { -50, 50 });
+        CHECK (rms (renderNode (*g, { sine (440, 0.0005f, second) })[0], second / 2) < 1e-5f);
+        const auto loud = sine (440, 0.1f, second);
+        CHECK (near (rms (renderNode (*g, { loud })[0], second / 2), rms (loud, second / 2), 0.002f));
+    }
+    { // Compressor: a hot signal 26 dB over the threshold comes out much quieter.
+        auto c = make ("compressor", { -20, 10, 1, 50, 0 });
+        const auto in = sine (220, 0.5f, second);
+        CHECK (rms (renderNode (*c, { in })[0], second / 2) < rms (in, second / 2) * 0.25f);
+    }
+    { // Tuner: mutes while engaged and hears the pitch of A4 and low E.
+        for (float hz : { 440.0f, 82.41f })
+        {
+            auto t = make ("tuner", { 440 });
+            auto out = renderNode (*t, { sine (hz, 0.2f, second / 2) });
+            CHECK (rms (out[0]) == 0.0f);
+            const float heard = dynamic_cast<rig::Tuner&> (*t).detect();
+            if (! near (heard, hz, hz * 0.003f)) std::printf ("  tuner heard %.2f for %.2f\n", heard, hz);
+            CHECK (near (heard, hz, hz * 0.003f));
+        }
+    }
+    { // Volume pedal: heel down is silent, toe down is unity.
+        const auto in = sine (440, 0.2f, second / 4);
+        CHECK (rms (renderNode (*make ("volume", { 0 }), { in })[0], second / 8) < 1e-6f);
+        CHECK (near (rms (renderNode (*make ("volume", { 1 }), { in })[0], second / 8), rms (in, second / 8), 1e-4f));
+    }
+    { // Reverb: keeps ringing after the input stops.
+        auto r = make ("reverb", { 3, 20, 6, 0.5f });
+        std::vector<float> burst ((size_t) second);
+        for (int i = 0; i < 2000; ++i) burst[(size_t) i] = (float) std::sin (i * 0.05);
+        auto out = renderNode (*r, { burst, burst });
+        CHECK (rms (out[0], second / 2) > 1e-4f && rms (out[1], second / 2) > 1e-4f);
+    }
+    { // Looper: record, play back, overdub, undo the overdub.
+        auto node = make ("looper", { 1 });
+        auto& l = dynamic_cast<rig::Looper&> (*node);
+        std::vector<float> ramp (1000), zeros (1000), ones (1000, 0.5f);
+        for (int i = 0; i < 1000; ++i) ramp[(size_t) i] = (float) i / 1000.0f;
+        l.command = rig::Looper::Main; renderNode (l, { ramp });            // record
+        l.command = rig::Looper::Main; auto play = renderNode (l, { zeros }); // play
+        CHECK (play[0] == ramp);
+        l.command = rig::Looper::Main; renderNode (l, { ones });            // overdub one pass
+        l.command = rig::Looper::Main; auto dub = renderNode (l, { zeros });
+        CHECK (near (dub[0][500], ramp[500] + 0.5f, 1e-6f));
+        l.command = rig::Looper::Undo; renderNode (l, { zeros });
+        auto undone = renderNode (l, { zeros });
+        CHECK (undone[0] == ramp);
+    }
+    // Everything else: a sane, non-silent signal for a plain sine.
+    for (auto [type, params] : std::vector<std::pair<const char*, std::vector<float>>> {
+             { "octave", { 1, 0.5f, 0.5f } }, { "eq", { 6, 0, -6, 0, 3, 0, 0, 0 } }, { "wah", { 0.5f, 4 } },
+             { "chorus", { 0.8f, 0.5f, 0.5f } }, { "flanger", { 0.3f, 0.6f, 0.5f, 0.5f } },
+             { "phaser", { 0.5f, 0.7f, 0.3f, 1 } }, { "tremolo", { 5, 0.5f, 1 } } })
+    {
+        auto out = renderNode (*make (type, params), { sine (330, 0.2f, second / 2) });
+        bool finite = true;
+        for (auto& ch : out) for (float v : ch) finite = finite && std::isfinite (v);
+        if (! (finite && rms (out[0], second / 4) > 0.01f)) std::printf ("  %s misbehaved\n", type);
+        CHECK (finite && rms (out[0], second / 4) > 0.01f);
+    }
+}
+
 int main()
 {
+    checkDevices();
+
     { // Biquads: lowpass passes DC, highpass blocks it.
         rig::Biquad lp, hp;
         lp.set (rig::Biquad::LowPass, SR, 1000);

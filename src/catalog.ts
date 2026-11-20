@@ -18,6 +18,7 @@ export type DeviceDef = {
   params: Param[];
   power?: { volts: number; mA: number }; // undefined = passive or wall-powered
   footswitch?: boolean;
+  startsOff?: boolean; // placed bypassed (a tuner mutes while on)
   parts?: Part[];
 };
 
@@ -47,7 +48,7 @@ export const CATALOG = {
     params: [p('levelA', 0, 1, 1), p('levelB', 0, 1, 1), choice('phaseB', ['normal', 'flipped'])],
   },
 
-  tuner: pedal('Tuner', 50, [p('reference', 430, 450, 440)]),
+  tuner: { ...pedal('Tuner', 50, [p('reference', 430, 450, 440)]), startsOff: true },
   gate: pedal('Noise Gate', 10, [p('threshold', -80, 0, -50), p('release', 10, 500, 100)]),
   compressor: pedal('Compressor', 10, [p('threshold', -60, 0, -20), p('ratio', 1, 20, 4), p('attack', 0.1, 100, 5), p('release', 10, 1000, 100), p('makeup', 0, 24, 0)]),
   boost: pedal('Boost', 10, [p('gain', 0, 24, 6), p('treble', -12, 12, 0)]),

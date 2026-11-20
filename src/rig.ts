@@ -45,7 +45,8 @@ export function addDevice(rig: Rig, type: DeviceType, at: XY): [Rig, string] {
   while (rig.devices[`${type}-${n}`]) n++;
   const id = `${type}-${n}`;
   const params = Object.fromEntries(def(type).params.map((p) => [p.name, p.def]));
-  return [{ ...rig, devices: { ...rig.devices, [id]: { id, type, params, on: true, pos: { board: at, grid: at } } } }, id];
+  const on = !def(type).startsOff;
+  return [{ ...rig, devices: { ...rig.devices, [id]: { id, type, params, on, pos: { board: at, grid: at } } } }, id];
 }
 
 export function removeDevice(rig: Rig, id: string): Rig {

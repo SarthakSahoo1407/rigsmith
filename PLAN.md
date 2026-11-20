@@ -12,7 +12,7 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 | Monitoring | Wired headphones/monitors on the interface. Bluetooth is too slow for live playing. |
 | Amp realism | Built-in nodes now (WaveShaper + tone stack + cab filters). NAM neural captures later, swapped inside the amp device only. |
 | Power | On/off only. Unpowered pedal = silent. Devices store volts/mA but nothing checks them yet. |
-| UI | One rig, two views with a toggle: realistic top-down **Board** and abstract **Grid**. Built on React Flow (`@xyflow/react`). Each device stores a separate position per view. Both views are fully editable. |
+| UI | One rig, two views with a toggle. **Board**: a stage at soundcheck with auto zones (`src/layout.ts`): amp heads stacked on their cabs with mics in front on the stage, pedals in slots on a pedalboard (signal right to left, wrapping rows, power bricks on the rail), interface on a desk, guitar input beside the board. Drag reorders within a zone; nothing floats. **Grid**: free-form boxes. Built on React Flow (`@xyflow/react`). Graphite chrome, one amber accent, gaffer-tape name labels. |
 | Stereo | Every cable is mono. Stereo gear has separate L/R jacks. A mono signal into only Output L plays on both sides. |
 | Cables | Ideal (no tone loss). 5 ms fade on connect/disconnect, so no pops. |
 | Footswitches | Click, or an assignable keyboard hotkey (1–9, Space for looper). |
@@ -118,10 +118,14 @@ src/rig.test.ts     vitest: canConnect, cycles, power, normalled loop, compile, 
 src/catalog.ts      jacks, params, power per device type
 src/native.ts       JUCE bridge (call / on)
 src/App.tsx         React Flow canvas, Board/Grid toggle, toolbar, hotkeys, undo
-src/devices/*.tsx   board and grid look per device (split only when App.tsx gets too long)
+src/layout.ts       Board zones and slot placement, drag-to-reorder hints
+src/gear.tsx        Board look: stompboxes, treadles, amp head, cabs, mics, interface, power brick
+src/app.css         all styles
 native/CMakeLists.txt  fetches JUCE 8.0.15, builds Rig.app, bundles dist/
 native/Main.cpp     app, window, bridge, settings, rig storage
-native/Engine.h     graph, node types, biquad, oversampled shaper
+native/Dsp.h        biquad, oversampled shaper, delay line, LFO, envelope, Node base
+native/Devices.h    one sound model per device type
+native/Engine.h     graph build, handover to the audio thread
 native/check.cpp    offline engine check (RigCheck)
 src/presets.ts      built-in rigs
 ```
@@ -132,7 +136,7 @@ src/presets.ts      built-in rigs
 2. **Rig model.** `rig.ts` + tests for every routing rule, undo, autosave/presets/JSON (validate imported files; they are untrusted).
 3. **Wiring UI.** React Flow Board view: place devices from a palette, drag audio and power cables jack to jack, refused connections show why. Grid view toggle.
 4. **Core rig.** Engine sync + Power Supply, Splitter, Joiner, Boost, Distortion, Amp (with normalled loop), Cabs, Mics, Output. Check: two amps in parallel panned L/R, a pedal in the amp loop.
-5. **Full catalog.** The remaining pedals, including the worklet ones and on-screen treadles.
+5. **Full catalog.** Done: every device has a sound model; realistic Board look; tuner readout and looper controls stream from the engine (`live` event, 10 Hz); 21 built-in presets in six categories (Clean, Acoustic, Crunch, Lead, Metal, Ambient).
 6. **Play it.** Hotkeys, footswitch feel, glitch warning, a release build of `Rig.app`.
 
 ## Later (not in v1)
