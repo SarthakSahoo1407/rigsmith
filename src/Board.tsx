@@ -10,12 +10,12 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { PanelLeftClose, PanelLeftOpen, Replace, Trash2, X } from 'lucide-react';
-import { AMP_MODELS, def, itemsOf, MAKER, type DeviceType, type Item, type Jack, type JackKind } from './catalog';
+import { def, itemParams, itemsOf, makerOf, variantOf, type DeviceType, type Item, type Jack, type JackKind } from './catalog';
 import {
   colorOf, deviceName, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams, readout, tapeName, Thumb,
   TunerScreen, type Edit, type Live,
 } from './gear';
-import { dropHints, gearSize, isPedal, layoutBoard, layoutGrid, TILE, type Layout, type Zone } from './layout';
+import { cones, dropHints, gearSize, isPedal, layoutBoard, layoutGrid, MIC_HEAD, TILE, type Layout, type Zone } from './layout';
 import {
   addDevice, cableAt, canConnect, connect, disconnect, insertIntoCable, isPowered, moveDevice, placeMic, powerUp, removeDevice,
   replaceDevice, setParam, toggle, type Device, type JackRef, type Rig, type XY,
@@ -98,7 +98,8 @@ function toEdges(rig: Rig, prev: Edge[], view: View): Edge[] {
     id: c.id, type: 'cable', source: c.from.device, sourceHandle: c.from.jack, target: c.to.device, targetHandle: c.to.jack,
     data: { kind: jackKind(rig, c.from) }, selected: selected.has(c.id),
   }));
-  const mics: Edge[] = Object.values(rig.devices).flatMap((d) => d.mic ? [{
+  // On the board a mic stands on its cab's face, so the link only shows in the grid.
+  const mics: Edge[] = view === 'board' ? [] : Object.values(rig.devices).flatMap((d) => d.mic ? [{
     id: `mic:${d.id}`, type: 'cable', source: d.mic.cab, sourceHandle: 'mic', target: d.id, targetHandle: 'mic',
     data: { kind: 'mic' }, selectable: false, deletable: false,
   }] : []);
@@ -273,13 +274,12 @@ function DeviceControls({ d }: { d: Device }) {
   );
 }
 
-// What a device can be swapped for: any pedal for a pedal, another model for an amp or mic.
+// What a device can be swapped for: any pedal for a pedal, any amp for an amp, any cab for a cab.
 function replacements(d: Device): Item[] {
-  if (d.type === 'amp') return AMP_MODELS.map((name, model) => ({ type: 'amp', model, name }));
-  if (d.type === 'mic') return def('mic').params[0].options!.map((name, model) => ({ type: 'mic', model, name: `${name} mic` }));
+  if (d.type === 'amp' || d.type === 'cab') return itemsOf(d.type);
   return PEDAL_TYPES.includes(d.type) ? PEDAL_TYPES.flatMap(itemsOf) : [];
 }
-const sameItem = (d: Device, i: Item) => i.type === d.type && (i.model === undefined || i.model === d.params.model);
+const sameItem = (d: Device, i: Item) => i.type === d.type && (i.variant === undefined || i.variant === variantOf(d.type, d.params));
 
 function Head({ d, onClose }: { d: Device; onClose: () => void }) {
   const { rig } = useContext(RigCtx);
@@ -288,7 +288,7 @@ function Head({ d, onClose }: { d: Device; onClose: () => void }) {
       <span className="swatch" style={{ background: colorOf(d.type, d.params) }} />
       <div className="inspector-title">
         <h2>{tapeName(rig, d)}</h2>
-        <span>{MAKER[d.type]} · {def(d.type).label}</span>
+        <span>{makerOf(d.type, d.params)} · {def(d.type).label}</span>
       </div>
       <button className="icon" aria-label="Close" title="Close (Esc)" onClick={onClose} autoFocus><X size={16} strokeWidth={1.5} /></button>
     </header>
@@ -324,13 +324,13 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
                   const item = options[Number(e.target.value)];
                   let next = id;
                   ctx.edit((r) => {
-                    const [rig, nid] = replaceDevice(r, id, item.type, item.model === undefined ? {} : { model: item.model });
+                    const [rig, nid] = replaceDevice(r, id, item.type, itemParams(item));
                     next = nid;
                     return rig;
                   });
                   onReplaced(next);
                 }}>
-                  {options.map((o, i) => <option key={`${o.type}:${o.model}`} value={i}>{o.name}</option>)}
+                  {options.map((o, i) => <option key={`${o.type}:${o.variant}`} value={i}>{o.name}</option>)}
                 </select>
               </label>
             )}
@@ -429,12 +429,12 @@ function Locker({ collapsed, onCollapse, onAdd }: { collapsed: boolean; onCollap
           <h3>{group}</h3>
           <div className="locker-grid">
             {types.flatMap(itemsOf).map((item) => (
-              <button key={`${item.type}:${item.model}`} className="locker-item" draggable title={`${MAKER[item.type]} ${item.name}`}
+              <button key={`${item.type}:${item.variant}`} className="locker-item" draggable title={`${makerOf(item.type, itemParams(item))} ${item.name}`}
                 onDragStart={(e) => { e.dataTransfer.setData(DND, JSON.stringify(item)); e.dataTransfer.effectAllowed = 'copy'; }}
                 onClick={() => onAdd(item)}>
                 <Thumb item={item} />
                 <span className="locker-name">{item.name}</span>
-                <span className="locker-maker">{MAKER[item.type]}</span>
+                <span className="locker-maker">{makerOf(item.type, itemParams(item))}</span>
               </button>
             ))}
           </div>
@@ -488,7 +488,7 @@ export function Board({ rig, view, edit, flash, inputs, live, levels }: Ctx & { 
     edit((r) => {
       let [next, id] = addDevice(r, item.type, boardHint(r, item.type));
       added = id;
-      if (item.model !== undefined) next = setParam(next, id, 'model', item.model);
+      for (const [k, v] of Object.entries(itemParams(item))) next = setParam(next, id, k, v);
       if (at && view === 'board' && isPedal(next.devices[id])) {
         const hints = dropHints(next, layoutBoard(next), id, { x: at.x - gearSize(next.devices[id]).w / 2, y: at.y });
         for (const [hid, hint] of Object.entries(hints)) next = moveDevice(next, hid, 'board', hint);
@@ -561,9 +561,20 @@ export function Board({ rig, view, edit, flash, inputs, live, levels }: Ctx & { 
       const d = r.devices[node.id];
       if (!d) return r;
       if (d.type === 'mic') {
-        // A mic dropped on a cab stands in front of it; dropped anywhere else, it comes loose.
-        const cab = flow.getIntersectingNodes(node).find((n) => r.devices[n.id]?.type === 'cab');
-        r = placeMic(r, d.id, cab && { cab: cab.id, x: d.mic?.x ?? 0.5, y: 0.5, distance: d.mic?.distance ?? 0.2 });
+        // A mic dropped on a cab points at the nearest cone: how far from its centre sets the position
+        // (centre = bright, edge = dark), the side it's on is kept. Dropped anywhere else, it comes loose.
+        const head = { x: node.position.x + MIC_HEAD.x, y: node.position.y + MIC_HEAD.y };
+        const cab = flow.getIntersectingNodes(node).map((n) => r.devices[n.id]).find((x) => x?.type === 'cab');
+        if (!cab) return placeMic(r, d.id, undefined);
+        let at = { x: d.mic?.x ?? 0.3, y: d.mic?.y ?? 0.75 };
+        if (view === 'board' && layout) {
+          const origin = layout.pos[cab.id];
+          const c = cones(cab.params.size).reduce((best, k) =>
+            Math.hypot(origin.x + k.x - head.x, origin.y + k.y - head.y) < Math.hypot(origin.x + best.x - head.x, origin.y + best.y - head.y) ? k : best);
+          const dx = head.x - (origin.x + c.x);
+          at = { x: Math.min(1, Math.abs(dx) / (c.r * 0.85)), y: dx < 0 ? 0.25 : 0.75 };
+        }
+        r = placeMic(r, d.id, { cab: cab.id, ...at, distance: d.mic?.distance ?? 0.2 });
         return view === 'grid' ? moveDevice(r, d.id, 'grid', node.position) : r;
       }
       if (view === 'grid') {

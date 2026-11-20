@@ -250,7 +250,7 @@ describe('board layout', async () => {
     for (const b of boxes) expect(Number.isFinite(b.x) && Number.isFinite(b.y), b.id).toBe(true);
     for (const a of boxes)
       for (const b of boxes)
-        if (a.id < b.id) {
+        if (a.id < b.id && rig.devices[a.id].mic?.cab !== b.id && rig.devices[b.id].mic?.cab !== a.id) { // a mic stands on its cab's face
           const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
           expect(apart, `${a.id} overlaps ${b.id}`).toBe(true);
         }

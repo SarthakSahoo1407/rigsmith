@@ -53,7 +53,7 @@ function build(steps: (kit: Kit) => void): Rig {
     mic: (model, cab, position, distance) => {
       const n = mics[cab] = (mics[cab] ?? -1) + 1;
       const id = add('mic', { x: n, y: 0 }, 1, { model: choice('mic', 'model', model) });
-      rig = placeMic(rig, id, { cab, x: position, y: 0.5, distance });
+      rig = placeMic(rig, id, { cab, x: position, y: n % 2 ? 0.25 : 0.75, distance }); // a second mic on the same cone goes on the other side
       return id;
     },
     output: (volume) => add('output', { x: 0, y: 0 }, 0, volume === undefined ? {} : { volume }),

@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Trash2, Undo2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { Board, type Edit, type View } from './Board';
-import type { Live } from './gear';
+import { GearDefs, type Live } from './gear';
 import { call, inApp, on, type Meter, type State } from './native';
 import { DEFAULT_PRESET, PRESETS } from './presets';
 import { commit, compile, history, parseRig, redo, toggle, undo, type History, type Rig } from './rig';
@@ -21,22 +21,53 @@ const KEYS: [string, string][] = [
   ['\\', 'Show or hide the gear list'], ['⌘Z  ⇧⌘Z', 'Undo / redo'], ['⌘S', 'Save preset'], ['⌘O  ⌘E', 'Open / export a .rigsmith file'], ['?', 'This list'],
 ];
 
-// The whole screen while tuning: big note, cents needle. The output is muted until it closes.
-function Tuner({ hz, onClose }: { hz: number; onClose: () => void }) {
+// The standalone tuner, styled after a studio app's: an arc from -50 to +50 cents, an orange needle
+// with the gap to centre shaded, the note big, Hz and cents either side. The output is muted while open.
+const PIVOT = { x: 450, y: 470 };
+const polar = (r: number, deg: number) => ({ x: PIVOT.x + r * Math.sin((deg * Math.PI) / 180), y: PIVOT.y - r * Math.cos((deg * Math.PI) / 180) });
+const arc = (r: number, from: number, to: number) => {
+  const [a, b] = [polar(r, from), polar(r, to)];
+  return `M ${a.x} ${a.y} A ${r} ${r} 0 0 ${to > from ? 1 : 0} ${b.x} ${b.y}`;
+};
+function Tuner({ hz, input, onClose }: { hz: number; input: string; onClose: () => void }) {
   const n = hz ? 12 * Math.log2(hz / 440) + 69 : 0;
   const cents = hz ? Math.round((n - Math.round(n)) * 100) : 0;
+  const angle = Math.max(-50, Math.min(50, cents)) * 1.2;
   const inTune = hz > 0 && Math.abs(cents) <= 3;
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`tuner-window${inTune ? ' in-tune' : ''}`} role="dialog" aria-modal="true" aria-label="Tuner">
-        <button className="icon close" aria-label="Close tuner" title="Close (T or Esc)" onClick={onClose} autoFocus><X size={16} strokeWidth={1.5} /></button>
-        <b aria-live="polite">{hz ? NOTES[((Math.round(n) % 12) + 12) % 12] : '–'}</b>
-        <div className="tuner-scale">
-          {Array.from({ length: 11 }, (_, i) => <span key={i} className={i === 5 ? 'mid' : ''} />)}
-          {hz > 0 && <i style={{ left: `${50 + cents}%` }} />}
+      <div className={`gb-tuner${inTune ? ' in-tune' : ''}`} role="dialog" aria-modal="true" aria-label="Tuner">
+        <header><button className="gb-close" aria-label="Close tuner" title="Close (T or Esc)" onClick={onClose} autoFocus />{input}</header>
+        <div className="gb-face">
+          <svg viewBox="0 0 900 560" aria-hidden>
+            <path d="M 0 560 L 900 170 L 900 0 L 0 0 Z" fill="rgba(255,255,255,.035)" />
+            <path d={arc(300, -60, 60)} stroke="#2a2a2c" strokeWidth="16" fill="none" />
+            {Array.from({ length: 21 }, (_, i) => {
+              const c = -50 + i * 5, a = polar(292, c * 1.2), b = polar(308, c * 1.2);
+              return <line key={c} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#1a1a1b" strokeWidth={c % 10 ? 2 : 3} />;
+            })}
+            {Array.from({ length: 11 }, (_, i) => {
+              const c = -50 + i * 10, p = polar(350, c * 1.2);
+              return <text key={c} x={p.x} y={p.y + 9} className="gb-label">{c}</text>;
+            })}
+            {hz > 0 && (
+              <>
+                <path d={`M ${polar(150, 0).x} ${polar(150, 0).y} L ${polar(300, 0).x} ${polar(300, 0).y} A 300 300 0 0 ${angle > 0 ? 1 : 0} ${polar(300, angle).x} ${polar(300, angle).y} L ${polar(150, angle).x} ${polar(150, angle).y} Z`} fill="rgba(240,138,36,.16)" />
+                <path d={arc(300, 0, angle || 0.01)} stroke="#f08a24" strokeWidth="16" fill="none" opacity=".75" />
+                <g className="gb-needle" style={{ transform: `rotate(${angle}deg)`, transformOrigin: `${PIVOT.x}px ${PIVOT.y}px` }}>
+                  <line x1={PIVOT.x} y1={PIVOT.y - 150} x2={PIVOT.x} y2={PIVOT.y - 312} stroke="#f08a24" strokeWidth="5" strokeLinecap="round" />
+                </g>
+              </>
+            )}
+            <path d={arc(140, -42, 42)} stroke="#3a3a3c" strokeWidth="3" fill="none" />
+          </svg>
+          <div className="gb-readout" aria-live="polite">
+            <span>{hz ? `${hz.toFixed(1)} Hz` : '– Hz'}</span>
+            <b>{hz ? NOTES[((Math.round(n) % 12) + 12) % 12] : '–'}</b>
+            <span>{hz ? `${cents > 0 ? '+' : ''}${cents} cents` : 'play a string'}</span>
+          </div>
         </div>
-        <small>{hz ? `${cents > 0 ? '+' : ''}${cents} cents · ${hz.toFixed(1)} Hz` : 'Play a string'}</small>
-        <span className="tuner-note">Output muted while tuning · A = 440 Hz</span>
+        <footer>Tuner</footer>
       </div>
     </div>
   );
@@ -192,6 +223,7 @@ export function App() {
 
   return (
     <div className="app">
+      <GearDefs />
       <header className="topbar">
         <span className="brand"><img src="./mark.svg" alt="" width={24} height={24} />Rigsmith</span>
         <div className="segmented" role="group" aria-label="View">
@@ -273,7 +305,7 @@ export function App() {
         <Board rig={h.present} view={view} edit={edit} flash={flash} inputs={audio.inputs ?? []} live={live}
           levels={{ in: meter.peak, out: meter.out, cpu: meter.cpu, ram: meter.ram }} />
       </ReactFlowProvider>
-      {tuning && <Tuner hz={live.__tuner?.hz ?? 0} onClose={() => setTuner(false)} />}
+      {tuning && <Tuner hz={live.__tuner?.hz ?? 0} input={audio.inputs?.[inputs[0]?.params.channel ?? 0] ?? 'Input 1'} onClose={() => setTuner(false)} />}
       {help && (
         <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setHelp(false)}>
           <div className="help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">

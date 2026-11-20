@@ -102,20 +102,6 @@ input.master { width: 88px; accent-color: var(--accent); }
 .device.board { position: relative; }
 
 /* ---- Controls shared by all gear ---- */
-.knob { display: grid; justify-items: center; gap: 2px; cursor: ns-resize; font-size: 10px; line-height: 12px; }
-.knob span { opacity: .8; white-space: nowrap; }
-.knob-small svg { width: 30px; height: 30px; }
-.knob-small .knob-skirt { fill: #0f0f10; stroke: #3a3a3e; }
-.knob-small .knob-cap { fill: #232325; }
-.knob-mark { stroke: #f2f2f2; stroke-width: 2.4; stroke-linecap: round; }
-.knob-pedal svg { width: 36px; height: 36px; }
-.knob-pedal .knob-skirt { fill: #0b0b0b; stroke: #000; }
-.knob-pedal .knob-cap { fill: #1f1f20; stroke: #2e2e30; stroke-width: 1; }
-.knob-amp svg { width: 44px; height: 44px; }
-.knob-amp .knob-skirt { fill: #121212; stroke: #000; }
-.knob-amp .knob-head { fill: #efe9da; stroke: rgba(0, 0, 0, .35); stroke-width: .6; }
-.knob-amp .knob-mark { stroke: #1a1a1a; stroke-width: 1.6; }
-.knob-tick { stroke: currentColor; stroke-width: 1; opacity: .7; }
 .knob:focus-visible, .fader:focus-visible, .rocker:focus-visible { outline: 2px solid var(--accent); border-radius: 6px; }
 
 .selector { display: flex; flex-direction: column; gap: 4px; }
@@ -163,38 +149,6 @@ input.master { width: 88px; accent-color: var(--accent); }
 .treadle-base { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .toe-switch { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #cfcfcf, #707070); }
 
-/* ---- Amp head ---- */
-.amp, .cab { position: relative; width: 100%; height: 100%; box-sizing: border-box; border-radius: 10px;
-  background: #151515 radial-gradient(rgba(255, 255, 255, .035) 1px, transparent 1.4px) 0 0 / 4px 4px;
-  box-shadow: inset 0 0 0 3px #0a0a0a, inset 0 0 0 5px #222, 0 14px 28px rgba(0, 0, 0, .6); }
-.corner { position: absolute; width: 18px; height: 18px; background: radial-gradient(circle at 35% 30%, #d6d6d6, #6c6c6c 75%); }
-.corner.tl { top: 0; left: 0; border-radius: 10px 0 6px 0; } .corner.tr { top: 0; right: 0; border-radius: 0 10px 0 6px; }
-.corner.bl { bottom: 0; left: 0; border-radius: 0 6px 0 10px; } .corner.br { bottom: 0; right: 0; border-radius: 6px 0 10px 0; }
-.amp { padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 10px; }
-.amp-panel { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 6px; color: #1b1b1b;
-  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, .07) 0 1px, transparent 1px 3px), linear-gradient(#dcdcd8, #b5b5b0);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7), inset 0 -1px 0 rgba(0, 0, 0, .3); }
-.amp-knobs { display: flex; gap: 6px; }
-.amp-knobs .knob span { opacity: .9; }
-.badge { font: 600 18px/1 var(--print); letter-spacing: .08em; }
-.amp-power { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.toggle { width: 8px; height: 18px; border-radius: 4px; background: linear-gradient(#f2f2f2, #8a8a8a); box-shadow: 0 0 0 2px #2a2a2a; }
-.jewel { width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #ffe2a8, var(--accent) 55%, #7a4a0e); box-shadow: 0 0 0 2px #2a2a2a, 0 0 8px rgba(232, 163, 61, .6); }
-.amp-grille { flex: 1; display: grid; place-items: center; border-radius: 4px; box-shadow: inset 0 0 0 2px #0a0a0a;
-  background: #22201c repeating-linear-gradient(0deg, rgba(255, 255, 255, .04) 0 1px, transparent 1px 3px), repeating-linear-gradient(90deg, rgba(255, 255, 255, .04) 0 1px, transparent 1px 3px); }
-
-/* ---- Cab ---- */
-.cab { padding: 18px 18px 48px; }
-.cab-grille { height: 100%; box-sizing: border-box; display: grid; gap: 16px; padding: 16px; border-radius: 4px; box-shadow: inset 0 0 0 2px #0a0a0a;
-  background-color: #22201c;
-  background-image: repeating-linear-gradient(0deg, rgba(255, 255, 255, .045) 0 1px, transparent 1px 3px), repeating-linear-gradient(90deg, rgba(255, 255, 255, .045) 0 1px, transparent 1px 3px); }
-.cab-0 .cab-grille { grid-template-columns: 1fr; }
-.cab-1 .cab-grille, .cab-2 .cab-grille { grid-template-columns: 1fr 1fr; }
-.cab-grille { grid-auto-rows: minmax(0, 1fr); }
-.speaker { position: relative; height: 100%; max-width: 100%; justify-self: center; align-self: center; aspect-ratio: 1; border-radius: 50%;
-  background: radial-gradient(circle, rgba(0, 0, 0, .35) 0 13%, transparent 14% 60%, rgba(0, 0, 0, .28) 61% 69%, transparent 70%); }
-.mic-spot { position: absolute; top: 50%; transform: translate(-50%, -50%); border-radius: 50%; background: #1b1b1d; box-shadow: 0 0 0 2px #e8e8e8; }
-.cab-foot { position: absolute; left: 20px; right: 20px; bottom: 12px; display: flex; align-items: center; justify-content: space-between; color: #cfcfcf; }
 .size-pick { display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: rgba(0, 0, 0, .4); }
 .size-pick button { height: 20px; padding: 0 8px; border-radius: 4px; font: 11px/14px var(--mono); color: #8d8d92; }
 .size-pick button.on { background: #2f2f32; color: var(--fg); }
@@ -238,29 +192,6 @@ input.master { width: 88px; accent-color: var(--accent); }
 .plate-select { height: 24px; max-width: 100%; padding: 0 8px; font: 500 12px/16px var(--print); border-radius: 4px;
   color: #f1f1f1; background: rgba(0, 0, 0, .55); border: 1px solid rgba(0, 0, 0, .6); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08); }
 .pedal .plate-select { width: 100%; }
-.amp-id { display: grid; gap: 6px; justify-items: start; }
-.amp-panel .plate-select { background: #1b1b1b; color: #e9e3d2; }
-.cab-foot .plate-select { height: 20px; font-size: 11px; }
-
-/* Each amp model wears its own covering and panel. */
-.amp.amp-m1 { background: #b89a62 repeating-linear-gradient(45deg, rgba(0, 0, 0, .12) 0 2px, transparent 2px 4px), repeating-linear-gradient(-45deg, rgba(255, 255, 255, .08) 0 2px, transparent 2px 4px); }
-.amp.amp-m1 .amp-panel { background: linear-gradient(#cfc3a5, #a99b78); }
-.amp.amp-m2 { background: #3a1a17 radial-gradient(rgba(255, 255, 255, .04) 1px, transparent 1.4px) 0 0 / 4px 4px; }
-.amp.amp-m2 .amp-panel { background: linear-gradient(#b8794a, #8a5533); color: #1a0f08; }
-.amp.amp-m0 .amp-panel, .amp.amp-m8 .amp-panel { background: linear-gradient(#2b2b2d, #19191a); color: #e8e8e8; }
-.amp.amp-m0 .amp-panel .knob span, .amp.amp-m8 .amp-panel .knob span { color: #e8e8e8; }
-.amp.amp-m0 .knob-amp .knob-head, .amp.amp-m8 .knob-amp .knob-head { fill: #e8e8e8; }
-.amp.amp-m5 .amp-panel { background: repeating-linear-gradient(60deg, rgba(255, 255, 255, .25) 0 2px, transparent 2px 9px), linear-gradient(#d4d6d9, #9fa2a6); }
-.amp.amp-m6 .amp-panel { background: linear-gradient(#1d1d1f, #0f0f10); color: #d8d8d8; }
-.amp.amp-m6 .amp-panel .knob span { color: #d8d8d8; }
-.amp.amp-m7 .amp-panel { background: linear-gradient(#e4e4e6, #c3c3c7); }
-
-/* Each speaker type behind its own grille cloth. */
-.cab.spk-0 .cab-grille { background-color: #8c7d5c; }
-.cab.spk-1 .cab-grille { background-color: #1c1c1d; }
-.cab.spk-2 .cab-grille { background-color: #4a2e26; }
-.cab.spk-3 .cab-grille { background-color: #2c2d30; }
-
 /* ---- Grid: tiles and the control panel ---- */
 .canvas-grid { background: var(--bg); }
 .tile { position: relative; box-sizing: border-box; padding: 12px 14px 12px 18px; display: flex; flex-direction: column; gap: 4px;
@@ -329,11 +260,6 @@ input.master { width: 88px; accent-color: var(--accent); }
 .thumb-plate { margin-top: 6px; width: 32px; height: 26px; border-radius: 3px; background: linear-gradient(rgba(255, 255, 255, .22), rgba(0, 0, 0, .16));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 1px 2px rgba(0, 0, 0, .45); }
 .thumb-label { position: absolute; left: 3px; right: 3px; bottom: 3px; height: 8px; border-radius: 1px; background: #0d0d0e; }
-.thumb-amp { width: 80px; height: 46px; margin-top: 10px; margin-bottom: 16px; padding: 4px; display: grid; grid-template-rows: 12px 1fr; gap: 3px; border-radius: 4px; background: #151515; box-shadow: 0 3px 6px rgba(0, 0, 0, .5); }
-.thumb-amp i:first-child { border-radius: 2px; background: linear-gradient(#dcdcd8, #a9a9a4); }
-.thumb-amp i:last-child { border-radius: 2px; background: #2b2822; }
-.thumb-cab { width: 60px; padding: 5px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border-radius: 4px; background: #151515; box-shadow: 0 3px 6px rgba(0, 0, 0, .5); }
-.thumb-cab i { border-radius: 50%; background: radial-gradient(circle, #111 0 18%, #2b2822 20% 62%, #111 64% 70%, #2b2822 72%); }
 .thumb-mic { width: 44px; }
 .thumb-mic .mic-art { width: 44px; height: 64px; }
 .thumb-brick { width: 80px; height: 22px; margin: 21px 0 29px; border-radius: 4px; background: linear-gradient(#2e2e31, #18181a); box-shadow: 0 3px 6px rgba(0, 0, 0, .5); }
@@ -373,11 +299,6 @@ input.master { width: 88px; accent-color: var(--accent); }
 .device.board.selected::after { content: ""; position: absolute; inset: -6px; border-radius: 14px; box-shadow: 0 0 0 2px var(--accent); pointer-events: none; }
 
 /* ---- Brands on the gear ---- */
-.amp-grille { position: relative; }
-.amp-grille .warn { position: absolute; bottom: 6px; }
-.logo { font: 700 26px/1 "Snell Roundhand", "Brush Script MT", cursive; color: #ddd6c4; text-shadow: 0 1px 0 #000, 0 -1px 0 rgba(255, 255, 255, .25); pointer-events: none; }
-.cab-grille { position: relative; }
-.cab-grille .logo { position: absolute; top: 2px; left: 12px; z-index: 1; font-size: 18px; }
 .treadle-maker, .mic-maker, .steel-maker { font: 600 9px/12px var(--print); letter-spacing: .18em; text-transform: uppercase; color: #8d8d92; text-align: center; }
 .steel-maker { color: #4a4a4e; }
 .steel-name { font: 600 13px/16px var(--print); }
@@ -389,9 +310,6 @@ input.master { width: 88px; accent-color: var(--accent); }
 .mic-where { font-size: 11px; line-height: 14px; color: var(--muted); }
 
 /* ---- Big controls (grid panel and device window) ---- */
-.knob-big svg { width: 52px; height: 52px; }
-.knob-big .knob-skirt { fill: #0b0b0b; stroke: #3a3a3e; }
-.knob-big .knob-cap { fill: #262628; }
 .knob-big output { font: 11px/14px var(--mono); color: var(--fg); font-variant-numeric: tabular-nums; }
 .inspector-knobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); justify-items: center; }
 kbd { margin-left: 6px; padding: 0 6px; font: 11px/16px var(--mono); border-radius: 4px; color: var(--fg2); background: var(--raised); border: 1px solid var(--hair); border-bottom-width: 2px; }
@@ -429,22 +347,169 @@ kbd { margin-left: 6px; padding: 0 6px; font: 11px/16px var(--mono); border-radi
 .tuner-button { height: 28px; padding: 0 12px; border-radius: 8px; font-size: 13px; background: var(--raised); border: 1px solid var(--hair); }
 .tuner-button.on { background: #0b120d; color: #8fe3a5; }
 
-/* ---- Standalone tuner ---- */
-.tuner-window { position: relative; width: min(560px, calc(100vw - 48px)); box-sizing: border-box; padding: 40px 32px 28px; display: grid; justify-items: center; gap: 16px;
-  border-radius: 20px; background: #0b120d; color: #8fe3a5; box-shadow: inset 0 0 0 1px rgba(143, 227, 165, .12), 0 24px 64px rgba(0, 0, 0, .6); }
-.tuner-window b { font: 500 112px/1 var(--mono); }
-.tuner-window.in-tune b { color: #d4ffe0; }
-.tuner-scale { position: relative; width: 100%; height: 40px; display: flex; align-items: center; justify-content: space-between; }
-.tuner-scale span { width: 2px; height: 12px; background: #2a4a33; }
-.tuner-scale span.mid { height: 32px; background: #8fe3a5; }
-.tuner-scale i { position: absolute; top: 0; bottom: 0; width: 4px; border-radius: 2px; background: currentColor; transform: translateX(-50%); transition: left 60ms linear; }
-.tuner-window small { font: 14px/20px var(--mono); font-variant-numeric: tabular-nums; }
-.tuner-note { font-size: 12px; color: #4f7a5b; }
-.tuner-window .close { position: absolute; top: 12px; right: 12px; color: #4f7a5b; }
-
 /* ---- Shortcuts ---- */
 .help { width: min(520px, calc(100vw - 48px)); box-sizing: border-box; padding: 20px; border-radius: 16px; background: var(--deep); border: 1px solid var(--hair); box-shadow: 0 24px 64px rgba(0, 0, 0, .6); }
 .help dl { margin: 16px 0 0; display: grid; gap: 8px; }
 .help dl div { display: grid; grid-template-columns: 120px 1fr; align-items: center; }
 .help dt kbd { margin: 0; }
 .help dd { margin: 0; font-size: 13px; color: var(--fg2); }
+
+/* ---- Knobs: one drawing, finishes chosen by the gear around them ---- */
+.knob { display: grid; justify-items: center; gap: 2px; cursor: ns-resize; font-size: 10px; line-height: 12px; }
+.knob span { opacity: .85; white-space: nowrap; }
+.knob svg { overflow: visible; filter: drop-shadow(0 2px 1.5px rgba(0, 0, 0, .55)); }
+.knob-small svg { width: 30px; height: 30px; }
+.knob-pedal svg { width: 38px; height: 38px; }
+.knob-amp svg { width: 52px; height: 52px; }
+.knob-big svg { width: 54px; height: 54px; }
+.knob-skirt { fill: url(#k-black); }
+.knob-knurl { fill: none; stroke: #000; stroke-width: 1.6; stroke-dasharray: .8 .9; opacity: .8; }
+.knob-cap { fill: url(#k-black); stroke: rgba(255, 255, 255, .14); stroke-width: .5; }
+.knob-top { fill: url(#k-black-top); }
+.knob-head { display: none; fill: #f1ead8; stroke: rgba(0, 0, 0, .45); stroke-width: .6; }
+.knob-mark { stroke: #f4f4f4; stroke-width: 2.2; stroke-linecap: round; }
+.knob-tick { stroke: currentColor; stroke-width: 1; opacity: .7; }
+.knob-num { font: 600 3.8px/1 var(--print); fill: currentColor; text-anchor: middle; filter: none; }
+.cap-chrome .knob-skirt, .cap-chrome .knob-cap { fill: url(#k-chrome); }
+.cap-chrome .knob-knurl { stroke: #4a4c50; }
+.cap-chrome .knob-top { fill: url(#k-chrome-top); }
+.cap-chrome .knob-mark, .cap-cream .knob-mark, .cap-gold .knob-mark { stroke: #151515; }
+.cap-cream .knob-skirt, .cap-cream .knob-cap, .cap-cream .knob-top { fill: url(#k-cream); }
+.cap-cream .knob-knurl { stroke: #8a7f63; }
+.cap-gold .knob-top, .cap-gold .knob-cap { fill: url(#k-gold); }
+.cap-chicken .knob-cap, .cap-chicken .knob-top, .cap-chicken .knob-knurl { display: none; }
+.cap-chicken .knob-head { display: inline; }
+.cap-chicken .knob-mark { stroke: #151515; stroke-width: 1.4; }
+
+/* ---- Pedal enclosures ---- */
+.pedal-name { margin: 2px 8px 0; text-align: center; font-size: 22px; line-height: 1.05; font-weight: 700; text-shadow: 0 1px 0 rgba(0, 0, 0, .35); overflow-wrap: anywhere; }
+.pedal.light .pedal-name { text-shadow: 0 1px 0 rgba(255, 255, 255, .45); }
+.pedal-name.upper { font-size: 18px; text-transform: uppercase; letter-spacing: .02em; }
+.pedal-maker { margin-top: 3px; text-align: center; font: 600 9px/12px var(--print); letter-spacing: .18em; text-transform: uppercase; opacity: .75; }
+.stomp { align-self: center; flex: none; width: 42px; height: 42px; margin: 10px 0 14px; display: grid; place-items: center; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fafafa, #a7a9ad 55%, #55575b); box-shadow: 0 3px 5px rgba(0, 0, 0, .6), inset 0 0 0 3px rgba(0, 0, 0, .25);
+  transition: transform 90ms var(--ease); }
+.stomp-cap { width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 38% 32%, #fff, #c4c6ca 55%, #74767a); box-shadow: 0 1px 2px rgba(0, 0, 0, .5); }
+.stomp:active { transform: scale(.95); }
+.rocker-switch { flex: none; height: 96px; margin: 10px 14px 14px; display: grid; place-items: center; border-radius: 4px; transform-origin: top center;
+  background: linear-gradient(#2b2b2d, #101011); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 3px 4px rgba(0, 0, 0, .6); transition: transform 90ms var(--ease); }
+.rocker-switch span { width: 80%; height: 72%; border-radius: 3px; background: repeating-linear-gradient(0deg, #151515 0 3px, #2a2a2a 3px 5px); }
+.rocker-switch:active { transform: perspective(300px) rotateX(-6deg); }
+.pedal:not(.shape-compact) { border-radius: 8px; }
+.shape-wide .pedal-knobs { flex-wrap: nowrap; gap: 4px; padding: 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, .6); color: #f2f2f2; }
+.shape-wide .pedal-name { font-size: 30px; }
+.shape-wide .pedal-name.upper { font-size: 26px; }
+.shape-screamer .pedal-name { margin: 8px 14px 0; padding: 4px 2px; border-radius: 3px; font-size: 19px; color: #1a1a1a; text-shadow: none;
+  background: linear-gradient(#f0f0f1, #a9abae); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .3); }
+.pedal.shape-round { border-radius: 50% / 46%; }
+.shape-round .pedal-face { padding-top: 36px; }
+.shape-round .pedal-lights { left: 50%; top: 18px; transform: translateX(-50%); }
+.shape-round .pedal-name { font-size: 28px; }
+.shape-round .stomp { margin-bottom: 26px; }
+.shape-round::after { border-radius: 50% / 46%; }
+.pedal.shape-hammered { color: #1a1a1a;
+  background: radial-gradient(circle at 30% 25%, rgba(255, 255, 255, .55) 0 1.5px, transparent 2.5px) 0 0 / 7px 7px,
+    radial-gradient(circle at 70% 65%, rgba(0, 0, 0, .16) 0 1.5px, transparent 2.5px) 0 0 / 9px 9px,
+    linear-gradient(160deg, #eceef0, #9ea2a7 55%, #cfd2d6); }
+.shape-hammered .pedal-name { font-size: 26px; text-shadow: 0 1px 0 rgba(255, 255, 255, .5); }
+
+/* ---- Amp heads: tolex or tweed, grille cloth with a nameplate, a control panel above or below ---- */
+.amp { --cover: #141414 radial-gradient(rgba(255, 255, 255, .045) 1px, transparent 1.4px) 0 0 / 4px 4px;
+  position: relative; width: 100%; height: 100%; box-sizing: border-box; padding: 14px; border-radius: 12px; background: var(--cover);
+  box-shadow: inset 0 0 0 2px #0a0a0a, inset 0 2px 0 rgba(255, 255, 255, .08), 0 16px 30px rgba(0, 0, 0, .6); }
+.amp-handle { position: absolute; top: -10px; left: 50%; width: 120px; height: 12px; transform: translateX(-50%); border-radius: 6px 6px 2px 2px; background: linear-gradient(#2c2c2c, #0d0d0d); }
+.amp-face { height: 100%; display: flex; flex-direction: column; border-radius: 6px; overflow: hidden; box-shadow: 0 0 0 2px #0a0a0a, 0 0 0 4px var(--piping, #cfc6ad); }
+.amp.panel-top .amp-face { flex-direction: column-reverse; }
+.amp-grille { position: relative; flex: 1; display: grid; place-items: center; background: var(--cloth); box-shadow: inset 0 2px 10px rgba(0, 0, 0, .6); }
+.amp-grille .warn { position: absolute; bottom: 6px; padding: 0 6px; border-radius: 4px; background: rgba(0, 0, 0, .7); }
+.amp-plate { display: grid; justify-items: center; padding: 3px 20px 5px; border-radius: 4px; background: linear-gradient(#1f1f1f, #060606);
+  box-shadow: 0 0 0 1.5px var(--plate-rim, #c9a84e), 0 3px 6px rgba(0, 0, 0, .6); }
+.amp-plate b { font: 700 25px/1.1 "Snell Roundhand", "Brush Script MT", cursive; color: var(--plate-ink, #ecd9a3); }
+.amp-plate i { font: 600 9px/12px var(--print); font-style: normal; letter-spacing: .18em; text-transform: uppercase; color: var(--plate-ink, #ecd9a3); opacity: .75; }
+.amp-panel { display: flex; align-items: center; gap: 12px; padding: 6px 14px; color: var(--panel-ink, #1b1b1b); background: var(--panel);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(0, 0, 0, .35); }
+.amp-knobs { display: flex; gap: 2px; }
+.amp-knobs .knob span { font: 600 8px/10px var(--print); letter-spacing: .1em; text-transform: uppercase; opacity: 1; }
+.amp-power { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.toggle { width: 8px; height: 18px; border-radius: 4px; background: linear-gradient(#f2f2f2, #8a8a8a); box-shadow: 0 0 0 2px #2a2a2a; }
+.jewel { width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #ffe2a8, var(--accent) 55%, #7a4a0e); box-shadow: 0 0 0 2px #2a2a2a, 0 0 8px rgba(232, 163, 61, .6); }
+
+/* Cloth and panel textures, shared by amps, cabs and their thumbnails. */
+.amp.m0, .thumb-amp.m0 { --cloth: repeating-linear-gradient(90deg, #bdbdbd 0 1px, #6f6f6f 1px 2px, #9a9a9a 2px 3px); --panel: linear-gradient(#29292b, #111112); --panel-ink: #ededed; --piping: #d8d8d8; --plate-rim: #cfd1d5; --plate-ink: #f4f4f4; }
+.amp.m1, .thumb-amp.m1 { --cover: repeating-linear-gradient(45deg, #dcbf82 0 2px, #9b7643 2px 3px, #e6cc93 3px 5px, #a5814d 5px 6px); --cloth: #4a1f18 repeating-linear-gradient(0deg, rgba(255, 255, 255, .07) 0 1px, transparent 1px 3px); --panel: linear-gradient(#ececee, #a6a8ac); --piping: #3a2a1a; }
+.amp.m2, .thumb-amp.m2 { --cloth: repeating-linear-gradient(-45deg, transparent 0 3px, rgba(214, 178, 112, .85) 3px 4px), repeating-linear-gradient(45deg, #4e3420 0 3px, #c9a466 3px 4px); --panel: linear-gradient(#d39461, #8a5533); --piping: #d9c7a0; --plate-ink: #e8c58a; }
+.amp.m3, .thumb-amp.m3 { --cloth: repeating-conic-gradient(#2b2925 0 25%, #8f877a 0 50%) 0 0 / 4px 4px; --panel: linear-gradient(#ecd58a, #b8933f); --piping: #ebe6d4; }
+.amp.m4, .thumb-amp.m4 { --cloth: #141414 radial-gradient(#2e2e2e 1px, transparent 1.3px) 0 0 / 3px 3px; --panel: linear-gradient(#e6cd7c, #a88634); --piping: #ebe6d4; }
+.amp.m5, .thumb-amp.m5 { --cloth: #121212 radial-gradient(#2a2a2a 1px, transparent 1.3px) 0 0 / 3px 3px;
+  --panel: repeating-linear-gradient(45deg, transparent 0 6px, rgba(255, 255, 255, .55) 6px 8px, transparent 8px 14px), repeating-linear-gradient(-45deg, transparent 0 6px, rgba(0, 0, 0, .18) 6px 8px, transparent 8px 14px), linear-gradient(#dcdee1, #9ea1a6);
+  --piping: #3a3a3c; --plate-rim: #cfd1d5; --plate-ink: #eef0f2; }
+.amp.m6, .thumb-amp.m6 { --cloth: #101010 radial-gradient(#262626 1px, transparent 1.3px) 0 0 / 3px 3px; --panel: repeating-linear-gradient(90deg, rgba(255, 255, 255, .04) 0 1px, transparent 1px 3px), linear-gradient(#222224, #0c0c0d);
+  --panel-ink: #ff5a4a; --piping: #c23a32; --plate-rim: #c23a32; --plate-ink: #f4f4f4; }
+.amp.m7, .thumb-amp.m7 { --cover: linear-gradient(#efe6cf, #d6c9a8); --cloth: #3a2a20 repeating-linear-gradient(90deg, rgba(220, 200, 170, .16) 0 1px, transparent 1px 3px); --panel: linear-gradient(#f3ede0, #cfc6ad); --piping: #5a3a22; --plate-rim: #b08a4e; }
+.amp.m7 { box-shadow: inset 0 0 0 6px #5a3a22, 0 16px 30px rgba(0, 0, 0, .6); }
+.amp.m8, .thumb-amp.m8 { --cover: #5d6065 radial-gradient(rgba(255, 255, 255, .06) 1px, transparent 1.4px) 0 0 / 4px 4px; --cloth: #161616; --panel: linear-gradient(#e4e6e8, #a6a9ad); --piping: #d8d8d8; --plate-rim: #cfd1d5; --plate-ink: #f4f4f4; }
+.amp.m1 .amp-handle, .amp.m7 .amp-handle { background: linear-gradient(#6a4a2a, #3a2614); }
+
+/* ---- Cabs ---- */
+.cab { --cover: #141414 radial-gradient(rgba(255, 255, 255, .045) 1px, transparent 1.4px) 0 0 / 4px 4px;
+  position: relative; width: 100%; height: 100%; box-sizing: border-box; border-radius: 12px; background: var(--cover);
+  box-shadow: inset 0 0 0 2px #0a0a0a, inset 0 2px 0 rgba(255, 255, 255, .08), 0 16px 30px rgba(0, 0, 0, .6); }
+.cab-grille { position: absolute; left: 22px; right: 22px; top: 22px; border-radius: 4px; background: var(--cloth);
+  box-shadow: 0 0 0 2px #0a0a0a, 0 0 0 4px var(--piping, #cfc6ad), inset 0 3px 12px rgba(0, 0, 0, .6); }
+.speaker { position: absolute; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, rgba(0, 0, 0, .3) 0 14%, rgba(0, 0, 0, .07) 15% 62%, rgba(0, 0, 0, .24) 64% 70%, transparent 72%); }
+.cab-logo { position: absolute; left: 50%; transform: translateX(-50%); font: 700 30px/1 "Snell Roundhand", "Brush Script MT", cursive; color: var(--logo, #ddd5bd);
+  text-shadow: 0 1px 0 #000, 0 -1px 0 rgba(255, 255, 255, .3); pointer-events: none; white-space: nowrap; }
+.cab.s1 .cab-logo, .cab.s3 .cab-logo { font: 800 26px/1 Futura, "Avenir Next", sans-serif; letter-spacing: .12em; text-transform: uppercase;
+  color: transparent; background: linear-gradient(#ffffff, #9a9a9e 55%, #e6e6e8); -webkit-background-clip: text; background-clip: text; text-shadow: none; filter: drop-shadow(0 1px 1px #000); }
+.cab-foot { position: absolute; left: 22px; right: 22px; bottom: 0; display: flex; flex-direction: column; justify-content: center; gap: 6px; color: #cfcfcf; }
+.cab-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
+.cab-spk { font: 600 10px/12px var(--print); letter-spacing: .14em; text-transform: uppercase; color: #a9a9ae; }
+.cab-mic { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #a9a9ae; }
+.cab-mic select { height: 20px; padding: 0 4px; font-size: 11px; border-radius: 4px; }
+.cab.s0, .thumb-cab.s0 { --cloth: repeating-conic-gradient(#2b2925 0 25%, #8f877a 0 50%) 0 0 / 4px 4px; --piping: #ebe6d4; }
+.cab.s1, .thumb-cab.s1 { --cloth: #121212 radial-gradient(#2c2c2c 1px, transparent 1.3px) 0 0 / 3px 3px; --piping: #3a3a3c; }
+.cab.s2, .thumb-cab.s2 { --cover: repeating-linear-gradient(45deg, #dcbf82 0 2px, #9b7643 2px 3px, #e6cc93 3px 5px, #a5814d 5px 6px);
+  --cloth: repeating-linear-gradient(-45deg, transparent 0 3px, rgba(214, 178, 112, .85) 3px 4px), repeating-linear-gradient(45deg, #4e3420 0 3px, #c9a466 3px 4px); --piping: #3a2a1a; --logo: #f4ead2; }
+.cab.s2 .cab-foot { color: #2a1d10; }
+.cab.s2 .cab-spk, .cab.s2 .cab-mic { color: #3a2a1a; }
+.cab.s3, .thumb-cab.s3 { --cloth: repeating-linear-gradient(90deg, #bdbdbd 0 1px, #6f6f6f 1px 2px, #9a9a9a 2px 3px); --piping: #d8d8d8; }
+.corner { z-index: 1; }
+
+/* ---- A mic on a cab, seen from behind ---- */
+.mic-front { width: 100%; height: 100%; cursor: grab; filter: drop-shadow(0 8px 6px rgba(0, 0, 0, .65)); }
+.mic-front svg { width: 100%; height: 100%; overflow: visible; }
+.react-flow__node:has(.mic-front) { z-index: 5 !important; }
+
+/* ---- Thumbnails for the new shapes ---- */
+.thumb-pedal.t-wide { width: 58px; height: 54px; margin-top: 10px; }
+.thumb-pedal.t-round { width: 50px; height: 56px; margin-top: 8px; border-radius: 50% / 46%; padding-top: 10px; }
+.thumb-pedal.t-hammered { background: radial-gradient(circle at 30% 25%, rgba(255, 255, 255, .6) 0 1px, transparent 1.6px) 0 0 / 4px 4px, linear-gradient(160deg, #eceef0, #9ea2a7 55%, #cfd2d6); }
+.thumb-stomp { position: absolute; bottom: 7px; left: 50%; width: 12px; height: 12px; transform: translateX(-50%); border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #9a9ca0 60%, #55575b); }
+.thumb-pedal.t-screamer .thumb-stomp { width: 26px; height: 18px; border-radius: 2px; background: repeating-linear-gradient(0deg, #151515 0 2px, #2a2a2a 2px 3px); }
+.thumb-amp { width: 84px; height: 46px; margin: 10px 0 16px; padding: 4px; display: grid; grid-template-rows: 1fr 12px; gap: 0; border-radius: 4px; background: var(--cover, #151515); box-shadow: 0 3px 6px rgba(0, 0, 0, .5); }
+.thumb-amp.m0 i:first-child, .thumb-amp.m1 i:first-child, .thumb-amp.m2 i:first-child, .thumb-amp.m8 i:first-child { order: 2; }
+.thumb-amp i:first-child { border-radius: 2px; background: var(--cloth); }
+.thumb-amp i:last-child { border-radius: 2px; background: var(--panel); }
+.thumb-amp { --cover: #151515; }
+.thumb-amp.m0, .thumb-amp.m1, .thumb-amp.m2, .thumb-amp.m8 { grid-template-rows: 12px 1fr; }
+.thumb-cab { width: 60px; padding: 7px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border-radius: 4px; background: var(--cloth);
+  box-shadow: inset 0 0 0 4px var(--cover, #151515), 0 3px 6px rgba(0, 0, 0, .5); }
+.thumb-cab { --cover: #151515; }
+.thumb-cab i { border-radius: 50%; background: radial-gradient(circle, rgba(0, 0, 0, .35) 0 16%, transparent 18% 60%, rgba(0, 0, 0, .25) 62% 70%, transparent 72%); }
+
+/* ---- Standalone tuner: a VU-style arc, an orange needle, the note big ---- */
+.gb-tuner { width: min(920px, calc(100vw - 48px)); box-sizing: border-box; overflow: hidden; border-radius: 14px; background: #2a2a2c;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .12), 0 30px 80px rgba(0, 0, 0, .7); }
+.gb-tuner header { position: relative; height: 40px; display: grid; place-items: center; font-size: 15px; font-weight: 600; }
+.gb-close { position: absolute; left: 14px; top: 13px; width: 14px; height: 14px; border-radius: 50%; background: #ff5f57; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .2); }
+.gb-face { position: relative; margin: 0 8px; border-radius: 8px; overflow: hidden; background: linear-gradient(160deg, #262628, #111112 60%); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .6); }
+.gb-face svg { display: block; width: 100%; height: auto; }
+.gb-label { font: 500 26px/1 system-ui, sans-serif; fill: #b5b5b9; text-anchor: middle; }
+.gb-needle { transition: transform 90ms linear; }
+.gb-readout { position: absolute; left: 0; right: 0; bottom: 40px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 48px; }
+.gb-readout span { font: 500 32px/1 system-ui, sans-serif; color: #8f8f94; font-variant-numeric: tabular-nums; }
+.gb-readout span:first-child { justify-self: end; }
+.gb-readout b { font: 700 150px/1 "Helvetica Neue", Helvetica, sans-serif; color: #f08a24; text-shadow: 0 0 24px rgba(240, 138, 36, .45); min-width: 120px; text-align: center; }
+.gb-tuner.in-tune .gb-readout b { color: #ffb14a; text-shadow: 0 0 36px rgba(255, 177, 74, .8); }
+.gb-tuner footer { height: 52px; display: grid; place-items: center; font-size: 24px; font-weight: 500; }

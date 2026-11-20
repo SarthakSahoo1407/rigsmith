@@ -11,8 +11,9 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 | Guitar input | Audio interface, chosen in JUCE's Audio Settings dialog (device, sample rate, buffer size, enabled channels). No MIDI. |
 | Monitoring | Wired headphones/monitors on the interface. Bluetooth is too slow for live playing. |
 | Amp realism | Nine amp models (US Clean, Tweed, UK Chime, UK Plexi, UK Lead, US Rectified, Modern High Gain, Boutique Lead, Jazz Clean): 1–4 gain stages at 8x oversampling with interstage filtering, a voiced tone stack, and a power section with sag, depth and presence. Cabs have a size and a speaker type. Drives, fuzz, boost, delay and reverb have models too. Cabs and the acoustic simulator are generated minimum-phase impulse responses (`designIr`: a magnitude curve plus seeded cone/wood ripple), so they sound measured rather than EQ'd. Tuned against FFT octave-band balance (`RigRender`), level-matched; retune from a real DI clip when one is available. NAM captures later. |
-| Branding | Fictional makers per kind of gear: Halvorsen (amps, cabs), Kestrel (pedals), Oriel (mics), Voltline (power), Arcadia Audio (interface, DI), Patchwell (splitter, joiner); the board is a Rigsmith Touring 32. Real brand names are never used. |
-| Pedals | Compact-stompbox look: glossy enclosure, controls and check light up top, a hinged plate that is the switch, maker label strip. Pedals that are several pedals in real life (drive, fuzz, boost, delay, reverb) are listed and drawn as separate pedals; the model stays a knob value. |
+| Branding | Fictional makers, never real ones. Each amp model has its own maker and look (Fairmont, Sutter, Wexford, Kingsway, Thornbury, Ironside, Vexor, Calloway, Moreau: tolex or tweed, grille cloth, nameplate, top or bottom panel, knob finish); each cab speaker type too (Kingsway, Ironside, Wexford, Fairmont). Pedals Kestrel, mics Oriel, power Voltline, interface and DI Arcadia Audio, routing Patchwell; the board is a Rigsmith Touring 32. Amps and cabs are separate items in the gear list, like the pedals. |
+| Pedals | Each pedal has the enclosure it's modelled on (`layout.ts shapeOf`): compact with a hinged plate, MXR-style stomp, wide, round fuzz, TS-style rocker, hammertone; chrome, cream, black or chicken-head knobs and its own typeface. Pedals that are several pedals in real life (drive, fuzz, boost, delay, reverb) are separate items; the model stays a knob value. |
+| Mics | A mic on a cab is drawn from behind on the cab's face, its head over a cone. Drag it across the cone to set position (centre bright, edge dark), scroll over it for distance. |
 | Power | On/off only. Unpowered pedal = silent. Devices store volts/mA but nothing checks them yet. |
 | UI | One rig, two views with a toggle. **Board**: a stage at soundcheck with auto zones (`src/layout.ts`): amp heads stacked on their cabs with mics in front on the stage, pedals in slots on a pedalboard (signal right to left, wrapping rows, power bricks on the rail), interface on a desk, guitar input beside the board. Drag reorders within a zone; nothing floats. **Grid**: free-form boxes. Built on React Flow (`@xyflow/react`). Graphite chrome, one amber accent, gaffer-tape name labels. |
 | Grid | Quad Cortex-style: equal tiles laid out by signal flow (columns) and branches (rows), routed cables, power gear hidden. The right panel shows the rig overview (levels, warnings, power all, the signal path with on/off per block) or the selected tile's controls. |
@@ -22,7 +23,7 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 | Footswitches | Click the plate, or keys 1–9 stomp pedals in signal order. |
 | Keys | ←/→ presets, V view, T tuner, M mute output, I mute input, B bypass, P power, Enter open, ⌫ delete, \\ gear list, ⌘Z/⇧⌘Z, ⌘S, ⌘O/⌘E, ? list. |
 | Gear list | Left sidebar, collapsible: thumbnails of the real gear. Click to add, drag onto the rig, or drop onto a cable to insert it there. Double-click any device for a large window with every control, Replace (same kind of gear) and Delete. |
-| Tuner | A tuner pedal in the chain, plus a standalone tuner (top bar, T) that listens to the input directly and mutes the output while open. |
+| Tuner | A tuner pedal in the chain, plus a standalone tuner (top bar, T) that listens to the input directly and mutes the output while open: an arc from −50 to +50 cents with an orange needle, the note big, Hz and cents either side. |
 | Mute | Master output mute (top bar, M) and an input mute on each DI box (I mutes all). |
 | Meters | Input and output peak meters, clip light, latency, audio CPU and app RAM. |
 | Wah / volume | On-screen treadle (drag or scroll wheel). |
@@ -133,7 +134,7 @@ src/app.css         all styles
 native/CMakeLists.txt  fetches JUCE 8.0.15, builds Rig.app, bundles dist/
 native/Main.cpp     app, window, bridge, settings, rig storage, meters, standalone tuner
 native/RigFile.h    encrypted .rigsmith export format
-native/icon.png     app icon (drawn in native/art/icon.svg)
+native/icon.png     app icon, an amp combo (drawn in native/art/icon.svg)
 native/Dsp.h        biquad, oversampled shaper, delay line, LFO, envelope, Node base
 native/Devices.h    one sound model per device type
 native/Engine.h     graph build, handover to the audio thread

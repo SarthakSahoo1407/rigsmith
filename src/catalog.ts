@@ -86,31 +86,41 @@ export const CATALOG = {
 export type DeviceType = keyof typeof CATALOG;
 export const def = (type: DeviceType): DeviceDef => CATALOG[type];
 
-// Fictional makers, one per kind of gear, the way a real rig mixes brands.
-export const MAKER: Record<DeviceType, string> = Object.fromEntries(
-  (Object.keys(CATALOG) as DeviceType[]).map((t) => [t,
-    t === 'amp' || t === 'cab' ? 'Halvorsen'
-      : t === 'mic' ? 'Oriel'
-      : t === 'power' ? 'Voltline'
-      : t === 'input' || t === 'output' ? 'Arcadia Audio'
-      : t === 'splitter' || t === 'joiner' ? 'Patchwell'
-      : 'Kestrel']),
-) as Record<DeviceType, string>;
+// Fictional makers. Every amp model and every cab (by speaker) has its own, like a real mixed rig.
+export const AMP_MAKERS = ['Fairmont', 'Sutter', 'Wexford', 'Kingsway', 'Thornbury', 'Ironside', 'Vexor', 'Calloway', 'Moreau'];
+export const CAB_MAKERS = ['Kingsway', 'Ironside', 'Wexford', 'Fairmont'];
+const MAKERS: Partial<Record<DeviceType, string>> = {
+  mic: 'Oriel', power: 'Voltline', input: 'Arcadia Audio', output: 'Arcadia Audio', splitter: 'Patchwell', joiner: 'Patchwell',
+};
+export const makerOf = (type: DeviceType, params: Record<string, number> = {}) =>
+  type === 'amp' ? AMP_MAKERS[params.model ?? 0] ?? AMP_MAKERS[0]
+    : type === 'cab' ? CAB_MAKERS[params.speaker ?? 0] ?? CAB_MAKERS[0]
+      : MAKERS[type] ?? 'Kestrel';
 
-// Pedals whose models are different pedals in real life: each model is its own pedal in the gear
-// list, with its own name and enclosure. The model stays a knob value, so the engine is unchanged.
-export const VARIANTS: Partial<Record<DeviceType, string[]>> = {
-  distortion: ['Overdrive', 'Distortion', 'Amp in a Box', 'Metal Drive'],
-  fuzz: ['Germanium Fuzz', 'Sustainer Fuzz'],
-  boost: ['Clean Boost', 'Treble Booster', 'Mid Boost'],
-  delay: ['Digital Delay', 'Tape Echo', 'Analog Delay'],
-  reverb: ['Room Reverb', 'Hall Reverb', 'Plate Reverb', 'Spring Reverb'],
+// Gear that is several products in real life: each one is its own item in the gear list, with its
+// own name and look. Which one it is stays a knob value (`param`), so the engine is unchanged.
+export const VARIANTS: Partial<Record<DeviceType, { param: string; names: string[] }>> = {
+  distortion: { param: 'model', names: ['Overdrive', 'Distortion', 'Amp in a Box', 'Metal Drive'] },
+  fuzz: { param: 'model', names: ['Germanium Fuzz', 'Sustainer Fuzz'] },
+  boost: { param: 'model', names: ['Clean Boost', 'Treble Booster', 'Mid Boost'] },
+  delay: { param: 'model', names: ['Digital Delay', 'Tape Echo', 'Analog Delay'] },
+  reverb: { param: 'model', names: ['Room Reverb', 'Hall Reverb', 'Plate Reverb', 'Spring Reverb'] },
+  amp: { param: 'model', names: AMP_MODELS },
+  cab: { param: 'speaker', names: ['Warm 25W cab', 'Aggressive 60W cab', 'Chimey alnico cab', 'Sparkly US cab'] },
+};
+export const variantOf = (type: DeviceType, params: Record<string, number>) => {
+  const v = VARIANTS[type];
+  return v ? params[v.param] ?? 0 : undefined;
 };
 
-// A device's name: the pedal it is ("Tape Echo"), or its catalog label.
-export const nameOf = (type: DeviceType, params: Record<string, number>) => VARIANTS[type]?.[params.model] ?? CATALOG[type].label;
+// A device's name: the product it is ("Tape Echo", "UK Plexi"), or its catalog label.
+export const nameOf = (type: DeviceType, params: Record<string, number>) => {
+  const v = VARIANTS[type];
+  return v?.names[params[v.param] ?? 0] ?? CATALOG[type].label;
+};
 
-// Everything you can add, as it appears in the gear list.
-export type Item = { type: DeviceType; model?: number; name: string };
+// Everything you can add, as it appears in the gear list. `variant` is the value of the variant knob.
+export type Item = { type: DeviceType; variant?: number; name: string };
 export const itemsOf = (type: DeviceType): Item[] =>
-  VARIANTS[type]?.map((name, model) => ({ type, model, name })) ?? [{ type, name: CATALOG[type].label }];
+  VARIANTS[type]?.names.map((name, variant) => ({ type, variant, name })) ?? [{ type, name: CATALOG[type].label }];
+export const itemParams = (i: Item): Record<string, number> => (i.variant === undefined ? {} : { [VARIANTS[i.type]!.param]: i.variant });

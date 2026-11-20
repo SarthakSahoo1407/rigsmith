@@ -13,7 +13,6 @@ export type Size = { w: number; h: number };
 export type Zone = { id: string; kind: 'stage' | 'board' | 'desk'; x: number; y: number; w: number; h: number };
 export type Layout = { pos: Record<string, XY>; zones: Zone[]; board: { right: number; top: number } };
 
-const WIDE = new Set<DeviceType>(['eq', 'compressor', 'delay', 'reverb', 'looper']);
 const STAGE_GEAR = new Set<DeviceType>(['amp', 'cab', 'mic']);
 const DESK_GEAR = new Set<DeviceType>(['input', 'output', 'power']);
 
@@ -22,18 +21,64 @@ const ROW_W = 1180; // usable board width
 const PAD = 32;
 const SLOT_GAP = 20;
 
+// Pedal enclosures, by what they're modelled on: a compact with a hinged plate, an MXR-style stomp,
+// a wide two-row box, a round fuzz, a TS-style rocker, a hammertone booster.
+export type Shape = 'compact' | 'stomp' | 'wide' | 'round' | 'screamer' | 'hammered';
+const SHAPES: Partial<Record<DeviceType, Shape | Shape[]>> = {
+  tuner: 'compact', eq: 'compact', boost: ['stomp', 'hammered', 'stomp'], distortion: ['screamer', 'compact', 'wide', 'compact'],
+  fuzz: ['round', 'wide'], chorus: 'wide', delay: ['compact', 'wide', 'stomp'], reverb: ['compact', 'wide', 'stomp', 'wide'],
+};
+export const shapeOf = (type: DeviceType, params: Record<string, number> = {}): Shape => {
+  const s = SHAPES[type];
+  return (Array.isArray(s) ? s[params.model ?? 0] : s) ?? 'stomp';
+};
+const SHAPE_SIZE: Record<Shape, Size> = {
+  compact: { w: 140, h: 304 }, stomp: { w: 152, h: 284 }, wide: { w: 236, h: 264 },
+  round: { w: 208, h: 248 }, screamer: { w: 140, h: 296 }, hammered: { w: 140, h: 284 },
+};
+
+// Cab sizes and where the speakers sit behind the grille (relative to the cab's corner).
+const CAB_SIZE: Size[] = [{ w: 320, h: 340 }, { w: 460, h: 340 }, { w: 520, h: 500 }];
+export const CAB_FOOT = 72;
+export function cones(size: number) {
+  const box = CAB_SIZE[size] ?? CAB_SIZE[1];
+  const gw = box.w - 44, gh = box.h - 22 - CAB_FOOT;
+  const cols = size === 0 ? 1 : 2, rows = size === 2 ? 2 : 1;
+  const r = Math.min(gw / cols, gh / rows) / 2 - 14;
+  return Array.from({ length: cols * rows }, (_, i) => ({
+    x: 22 + (gw / cols) * ((i % cols) + 0.5), y: 22 + (gh / rows) * (Math.floor(i / cols) + 0.5), r,
+  }));
+}
+// The mics on a cab, in the order they take the cones.
+export const micsOn = (rig: Rig, cab: string) => Object.values(rig.devices).filter((m) => m.mic?.cab === cab)
+  .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+// A mic on a cab is drawn from behind, its head over a cone; this is where the head sits in the mic's box.
+export const MIC_HEAD = { x: 40, y: 27.5 }; // the drawing is 64x172, shown at 1.25x
+// Where a mic's head sits on its cab: its cone, moved from the centre toward the edge by `position`,
+// on the side its `y` says (below 0.5 = left).
+export function micSpot(rig: Rig, mic: Device) {
+  const cab = rig.devices[mic.mic!.cab];
+  const k = micsOn(rig, cab.id).findIndex((m) => m.id === mic.id);
+  const all = cones(cab.params.size);
+  const c = all[k % all.length];
+  return { x: c.x + (mic.mic!.y < 0.5 ? -1 : 1) * mic.mic!.x * c.r * 0.85, y: c.y };
+}
+
 export function gearSize(d: Device): Size {
   switch (d.type) {
-    case 'amp': return { w: 520, h: 196 };
-    case 'cab': return [{ w: 300, h: 292 }, { w: 440, h: 292 }, { w: 520, h: 440 }][d.params.size] ?? { w: 440, h: 292 };
-    case 'mic': return { w: 120, h: 272 };
+    case 'amp': return { w: 540, h: 228 };
+    case 'cab': return CAB_SIZE[d.params.size] ?? CAB_SIZE[1];
+    case 'mic': return d.mic ? { w: 80, h: 215 } : { w: 120, h: 272 };
     case 'input': return { w: 148, h: 248 };
     case 'output': return { w: 224, h: 184 };
     case 'power': return { w: 336, h: 60 };
     case 'splitter': return { w: 112, h: 140 };
     case 'joiner': return { w: 156, h: 176 };
     case 'wah': case 'volume': return { w: 124, h: 312 };
-    default: return { w: WIDE.has(d.type) ? 180 : 140, h: 312 };
+    default: {
+      const s = SHAPE_SIZE[shapeOf(d.type, d.params)];
+      return d.type === 'eq' ? { ...s, w: 190 } : d.type === 'compressor' && s === SHAPE_SIZE.stomp ? { ...s, w: 172 } : s;
+    }
   }
 }
 
@@ -72,13 +117,13 @@ export function layoutBoard(rig: Rig): Layout {
       pos[d.id] = { x: x + (w - s.w) / 2, y };
       y += s.h;
     }
+    // Mics stand in front of their cab, heads over the cones, like a real session.
     const cab = stack.find((d) => d.type === 'cab');
-    const mics = cab ? devices.filter((m) => m.type === 'mic' && m.mic?.cab === cab.id).sort(byX) : [];
-    if (mics.length) {
-      const m = gearSize(mics[0]);
-      const span = mics.length * m.w + (mics.length - 1) * 16;
-      mics.forEach((mic, i) => { pos[mic.id] = { x: x + (w - span) / 2 + i * (m.w + 16), y: y + 32 }; placedMics.add(mic.id); });
-      y += 32 + m.h;
+    if (cab) for (const mic of micsOn(rig, cab.id)) {
+      const spot = micSpot(rig, mic);
+      pos[mic.id] = { x: pos[cab.id].x + spot.x - MIC_HEAD.x, y: pos[cab.id].y + spot.y - MIC_HEAD.y };
+      placedMics.add(mic.id);
+      y = Math.max(y, pos[mic.id].y + gearSize(mic).h);
     }
     stageH = Math.max(stageH, y);
     x += w + 64;
