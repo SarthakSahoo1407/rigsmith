@@ -106,9 +106,67 @@ private:
         .withResourceProvider ([] (const String& url) { return serveUi (url); })
         .withNativeFunction ("getState", [this] (const Array<var>&, auto complete) { complete (state()); })
         .withNativeFunction ("set", [this] (const Array<var>& a, auto complete) { set (a[0].toString(), a[1]); complete ({}); })
-        .withNativeFunction ("openAudioSettings", [this] (const Array<var>&, auto complete) { openAudioSettings(); complete ({}); }) };
+        .withNativeFunction ("openAudioSettings", [this] (const Array<var>&, auto complete) { openAudioSettings(); complete ({}); })
+        // Rig storage. The UI validates rig JSON (parseRig); this side only moves text.
+        .withNativeFunction ("listRigs", [] (const Array<var>&, auto complete) { complete (listRigs()); })
+        .withNativeFunction ("loadRig", [] (const Array<var>& a, auto complete) {
+            const auto f = rigFile (a[0]);
+            complete (f.existsAsFile() ? var (f.loadFileAsString()) : var());
+        })
+        .withNativeFunction ("saveRig", [] (const Array<var>& a, auto complete) { complete (rigFile (a[0]).replaceWithText (a[1].toString())); })
+        .withNativeFunction ("deleteRig", [] (const Array<var>& a, auto complete) { complete (rigFile (a[0]).deleteFile()); })
+        .withNativeFunction ("exportRig", [this] (const Array<var>& a, auto complete) { exportRig (a[0].toString(), a[1].toString(), complete); })
+        .withNativeFunction ("importRig", [this] (const Array<var>&, auto complete) { importRig (complete); }) };
+
+    std::unique_ptr<FileChooser> chooser;
 
     PropertiesFile* settings() { return props.getUserSettings(); }
+
+    static File rigsDir()
+    {
+        auto d = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Application Support/Rig/Rigs");
+        d.createDirectory();
+        return d;
+    }
+
+    // Names come from the UI: strip path characters so a name can't leave the folder.
+    static File rigFile (const var& name)
+    {
+        return rigsDir().getChildFile (File::createLegalFileName (name.toString()).replace ("..", "_") + ".json");
+    }
+
+    static var listRigs()
+    {
+        StringArray names;
+        for (const auto& f : rigsDir().findChildFiles (File::findFiles, false, "*.json"))
+            names.add (f.getFileNameWithoutExtension());
+        names.sortNatural();
+        Array<var> out;
+        for (const auto& n : names)
+            out.add (n);
+        return out;
+    }
+
+    void exportRig (const String& text, const String& name, WebBrowserComponent::NativeFunctionCompletion complete)
+    {
+        const auto start = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile (File::createLegalFileName (name) + ".json");
+        chooser = std::make_unique<FileChooser> ("Export rig", start, "*.json");
+        chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::warnAboutOverwriting,
+                              [text, complete] (const FileChooser& fc) {
+                                  const auto f = fc.getResult();
+                                  complete (f != File() && f.replaceWithText (text));
+                              });
+    }
+
+    void importRig (WebBrowserComponent::NativeFunctionCompletion complete)
+    {
+        chooser = std::make_unique<FileChooser> ("Import rig", File::getSpecialLocation (File::userDocumentsDirectory), "*.json");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [complete] (const FileChooser& fc) {
+            const auto f = fc.getResult();
+            // ponytail: 64 MB cap covers rigs with embedded IRs; stream it if rigs get bigger.
+            complete (f.existsAsFile() && f.getSize() < 64 * 1024 * 1024 ? var (f.loadFileAsString()) : var());
+        });
+    }
 
     var state()
     {
