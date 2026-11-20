@@ -1,0 +1,146 @@
+# Guitar Rig Simulator — Plan
+
+A desktop guitar rig (macOS) you build like a real one: place any number of pedals, amps, cabs, mics and power supplies, run audio and power cables between jacks in any order, split and rejoin the signal, and play through it live from an audio interface.
+
+## Decisions
+
+| Topic | Decision |
+|---|---|
+| Platform | JUCE 8 desktop app (C++, CMake). The UI is Vite + React + TypeScript running in JUCE's web view. Switched from the browser after Chrome measured ~14 ms reported (more in reality) with the interface; native targets 3–6 ms. |
+| Audio | JUCE `AudioDeviceManager` + `AudioProcessorGraph`. Built-in `juce_dsp` pieces first (IIR filters, WaveShaper, Convolution, Compressor, DelayLine, Oscillator); plain C++ processors where none exists (noise gate, octave, looper). |
+| Guitar input | Audio interface, chosen in JUCE's Audio Settings dialog (device, sample rate, buffer size, enabled channels). No MIDI. |
+| Monitoring | Wired headphones/monitors on the interface. Bluetooth is too slow for live playing. |
+| Amp realism | Built-in nodes now (WaveShaper + tone stack + cab filters). NAM neural captures later, swapped inside the amp device only. |
+| Power | On/off only. Unpowered pedal = silent. Devices store volts/mA but nothing checks them yet. |
+| UI | One rig, two views with a toggle: realistic top-down **Board** and abstract **Grid**. Built on React Flow (`@xyflow/react`). Each device stores a separate position per view. Both views are fully editable. |
+| Stereo | Every cable is mono. Stereo gear has separate L/R jacks. A mono signal into only Output L plays on both sides. |
+| Cables | Ideal (no tone loss). 5 ms fade on connect/disconnect, so no pops. |
+| Footswitches | Click, or an assignable keyboard hotkey (1–9, Space for looper). |
+| Wah / volume | On-screen treadle (drag or scroll wheel). |
+| Undo | Cmd+Z / Shift+Cmd+Z over rig snapshots. A knob drag is one step. |
+| Saving | Autosave and named presets as JSON files in `~/Library/Application Support/Rig`, written by the native side; JSON export/import. Audio device settings saved the same way. |
+| Build | `npm run build` (UI → `dist/`), then `cmake --build native/build` copies `dist/` into `Rig.app`. Dev: `RIG_DEV_URL=http://localhost:5173` makes the app load the Vite dev server for hot reload. |
+
+## Routing rules
+
+1. One cable per jack. Plugging into a used jack replaces the old cable.
+2. Splitting and joining only through devices: **Splitter** (1 in, 2 out; chain for more) and **Joiner** (2 in, 1 out, level per input, phase-flip switch).
+3. Only matching jacks connect: audio out → audio in, power outlet → power in, amp send → pedal in, pedal out → amp return, amp speaker out → cab in only.
+4. No feedback loops. A cable that would create a cycle is refused.
+5. A hidden, non-removable limiter sits on the final output.
+6. **Amp effects loop is normalled like a real amp:** with nothing in Return, the signal passes through the amp internally. A cable in Return breaks the internal path and feeds the power amp. A cable in Send alone is just a copy (tap) of the preamp signal.
+7. An amp with nothing on its speaker out is silent ("no load" warning).
+8. **Mics are placed, not cabled.** Drag a mic onto a cab's speaker; position (center brighter, edge darker) and distance (closer = more bass, further = quieter + small delay) are set by dragging. Several mics per cab are allowed. The mic's XLR output jack goes to the Output device. A cab without a mic is silent.
+9. Any audio output may go straight to the Output (DI / amp-less path).
+10. No limit on device count. The ceiling is CPU; an audio glitch shows a warning.
+
+## Data model (`src/rig.ts`, pure TypeScript)
+
+```ts
+type JackRef = { device: string; jack: string };
+type Cable = { id: string; from: JackRef; to: JackRef; kind: 'audio' | 'power' };
+type Device = {
+  id: string;
+  type: DeviceType;              // key into the catalog
+  params: Record<string, number>;
+  on: boolean;                   // footswitch
+  hotkey?: string;
+  pos: { board: XY; grid: XY };
+  mic?: { cab: string; x: number; y: number; distance: number }; // mic devices only
+  ir?: string;                   // cab: user-loaded IR, stored as base64 in the rig file
+};
+type Rig = { version: 1; devices: Record<string, Device>; cables: Cable[] };
+```
+
+The TypeScript catalog defines each type's jacks (name, audio/power, in/out, side of the box), params (range, default) and power need (volts, mA). The C++ side defines each type's DSP only.
+
+The UI owns the rig and compiles it before sending it to the engine: jack names become channel indices, unpowered devices are flagged, a mic placed on a cab becomes a cab → mic connection, and a cabled amp Return sets the amp's loop switch. The engine never sees jack names, power cables or positions:
+
+```ts
+type Compiled = {
+  nodes: { id: string; type: DeviceType; params: Record<string, number>; on: boolean; powered: boolean }[];
+  wires: { from: string; out: number; to: string; in: number }[];
+};
+```
+
+Pure functions in `rig.ts`: `canConnect(rig, from, to)` (rules 1, 3 and 4; cycle check treats each device as every input → every output), `isPowered(rig, id)`, plus add/remove/move/connect/disconnect/setParam. These carry the unit tests.
+
+## Audio engine (`native/Main.cpp`, split when it grows)
+
+- `AudioDeviceManager` runs the interface. Settings come from JUCE's `AudioDeviceSelectorComponent` dialog.
+- Bridge: JUCE web view native functions (`getState`, `set`, `openAudioSettings`, later `setRig`, `setParam`) and events pushed to the UI (`state`, `meter` at 30 Hz). `src/native.ts` is the JS side.
+- `setRig(compiled)` diffs nodes and wires into an `AudioProcessorGraph`. Each cable fades over 5 ms on connect/disconnect.
+- Knob changes go through `SmoothedValue`, so no zipper noise. Audio-thread values are atomics; no locks or allocation on the audio thread.
+- A footswitch crossfades between the effect and a dry bypass path. An unpowered device outputs silence.
+- **Guitar Input** device: input channel (among the enabled ones), trim, level meter, clip LED. Trim is the calibration knob.
+- **Output** device: L/R → master volume → limiter → interface outputs. The limiter is a zero-latency soft clipper (linear to 0.7, tanh above, never past ±1).
+- Shows round-trip latency (JUCE's input + output latency, which include the buffer) and CPU load.
+
+## Device catalog (v1, one model each, no brand names)
+
+The "Built from" column was written in Web Audio terms; each maps to its `juce_dsp` twin (biquad → `dsp::IIR`, WaveShaper → `dsp::WaveShaper` with `dsp::Oversampling`, ConvolverNode → `dsp::Convolution`, DelayNode → `dsp::DelayLine`, LFO → `dsp::Oscillator`, DynamicsCompressorNode → `dsp::Compressor`, AnalyserNode → a FIFO read by the UI timer, AudioWorklet → plain C++ processor).
+
+| Device | Jacks | Built from |
+|---|---|---|
+| Guitar Input | out | getUserMedia → ChannelSplitter → Gain (trim) |
+| Output | in L, in R | ChannelMerger → master → soft-clip limiter → destination |
+| Power Supply | 8 power outlets | no audio |
+| Splitter | in → out A, out B | Gain fan-out |
+| Joiner | in A, in B → out | 2× Gain (level, phase = −1) summed |
+| Tuner | in → out | AnalyserNode + autocorrelation on main thread; mutes output when engaged |
+| Noise Gate | in → out | AudioWorklet: envelope follower, threshold, hysteresis, release |
+| Compressor | in → out | DynamicsCompressorNode + makeup Gain |
+| Boost | in → out | Gain + treble biquad |
+| Distortion | in → out | pre-EQ → Gain → WaveShaper (tanh, 4× oversample) → tone lowpass → level |
+| Fuzz | in → out | Gain → asymmetric hard-clip WaveShaper (4×) → tone → level |
+| Octave | in → out | AudioWorklet: −1 octave by zero-crossing flip-flop, +1 by full-wave rectify; dry/sub/up mix |
+| EQ | in → out | 7 peaking biquads + level |
+| Wah | in → out | peaking/bandpass biquad, frequency from treadle |
+| Volume | in → out | Gain from treadle |
+| Chorus | in → out L/R | DelayNode with LFO on delayTime, L/R LFOs 90° apart |
+| Flanger | in → out | short DelayNode + LFO + internal feedback |
+| Phaser | in → out | 4–8 allpass biquads, LFO on frequency, feedback |
+| Tremolo | in → out | Gain with LFO on gain (sine/square) |
+| Delay | in → out L/R | 2× DelayNode, feedback, tone lowpass, ping-pong switch |
+| Reverb | in L/R → out L/R | ConvolverNode with a generated stereo noise-decay IR (rebuilt on decay change) |
+| Looper | in → out | AudioWorklet buffer: record, play, overdub, undo last layer. Memory only. |
+| Amp | in, send, return, speaker out; power from wall | highpass → preamp Gain → WaveShaper → tone stack (low shelf / peaking / high shelf) → [loop, rule 6] → power-amp WaveShaper → master. Voicings: clean / crunch / high-gain = param presets. |
+| Cab 1x12 / 2x12 / 4x12 | in | biquads (low cut, low resonance, presence peak, high cut) per size, or a user `.wav` IR via ConvolverNode |
+| Mic (dynamic / ribbon / condenser) | XLR out | placed on a cab: per-model EQ; position shifts lowpass; distance = Gain + DelayNode + low shelf |
+
+No audio files ship in v1, so there is nothing to license.
+
+## Files
+
+```
+src/rig.ts          data model, rules, compile(), pure functions
+src/rig.test.ts     vitest: canConnect, cycles, power, normalled loop, compile, undo
+src/catalog.ts      jacks, params, power per device type
+src/native.ts       JUCE bridge (call / on)
+src/App.tsx         React Flow canvas, Board/Grid toggle, toolbar, hotkeys, undo
+src/devices/*.tsx   board and grid look per device (split only when App.tsx gets too long)
+native/CMakeLists.txt  fetches JUCE 8.0.15, builds Rig.app, bundles dist/
+native/Main.cpp     app, window, bridge, engine, device processors (split when it grows)
+```
+
+## Phases (each ends with something playable)
+
+1. **Sound in, sound out.** JUCE app + React UI: Audio Settings dialog, input channel, trim, meter, clip LED, volume, limiter, latency and CPU readout. Check: you hear your guitar with no hum, no crackle and single-digit latency.
+2. **Rig model.** `rig.ts` + tests for every routing rule, undo, autosave/presets/JSON (validate imported files; they are untrusted).
+3. **Wiring UI.** React Flow Board view: place devices from a palette, drag audio and power cables jack to jack, refused connections show why. Grid view toggle.
+4. **Core rig.** Engine sync + Power Supply, Splitter, Joiner, Boost, Distortion, Amp (with normalled loop), Cabs, Mics, Output. Check: two amps in parallel panned L/R, a pedal in the amp loop.
+5. **Full catalog.** The remaining pedals, including the worklet ones and on-screen treadles.
+6. **Play it.** Hotkeys, footswitch feel, glitch warning, a release build of `Rig.app`.
+
+## Later (not in v1)
+
+- NAM neural amp/pedal captures (native NAM C++ core inside the amp processor)
+- VST/AU plugin build
+- Voltage/mA checks for power, hum/ground-loop noise
+- Cable tone loss and buffered/true-bypass behavior
+- MIDI footswitches and expression pedals
+- Intentional feedback loops
+- Scenes (one switch changes many pedals)
+- Windows build
+- Looper WAV export, multi-track, tempo sync
+- Bundled real cab/mic IR packs
