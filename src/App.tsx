@@ -1,79 +1,156 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { ReactFlowProvider } from '@xyflow/react';
+import { Board, type Edit, type View } from './Board';
 import { call, inApp, on, type Meter, type State } from './native';
+import { DEFAULT_PRESET, PRESETS } from './presets';
+import { commit, compile, history, parseRig, redo, undo, type History } from './rig';
+
+const AUTOSAVE = '_autosave';
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function App() {
-  const [state, setState] = useState<State>();
+  const [h, setH] = useState<History>();
+  const hRef = useRef(h);
+  const [view, setView] = useState<View>('board');
+  const [toast, setToast] = useState('');
+  const [presets, setPresets] = useState<string[]>([]);
+  const [name, setName] = useState('');
+  const [audio, setAudio] = useState<State>();
   const [meter, setMeter] = useState<Meter>({ peak: 0, cpu: 0 });
   const [clipAt, setClipAt] = useState(-Infinity);
 
+  const flash = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast((t) => (t === msg ? '' : t)), 3000);
+  };
+  const apply = (next: History) => { hRef.current = next; setH(next); };
+  const edit: Edit = (change, group) => {
+    const cur = hRef.current;
+    if (!cur) return;
+    try {
+      const next = change(cur.present);
+      if (next !== cur.present) apply(commit(cur, next, group));
+    } catch (e) {
+      flash(message(e));
+    }
+  };
+  const refreshPresets = () => call<string[]>('listRigs').then((l) => setPresets(l.filter((n) => n !== AUTOSAVE)));
+  const open = (text: string | null) => {
+    if (!text) return;
+    try { edit(() => parseRig(text)); } catch (e) { flash(`Can't open that rig: ${message(e)}`); }
+  };
+
   useEffect(() => {
     if (!inApp) return;
-    call<State>('getState').then(setState);
-    const offState = on<State>('state', setState);
+    call<string | null>('loadRig', AUTOSAVE).then((text) => {
+      let rig = PRESETS[DEFAULT_PRESET]();
+      if (text) {
+        try { rig = parseRig(text); } catch (e) { flash(`Last session's rig was unreadable, starting fresh: ${message(e)}`); }
+      }
+      apply(history(rig));
+    });
+    refreshPresets();
+    call<State>('getState').then(setAudio);
+    const offState = on<State>('state', setAudio);
     const offMeter = on<Meter>('meter', (m) => {
       setMeter(m);
       if (m.peak >= 0.99) setClipAt(performance.now());
     });
-    return () => { offState(); offMeter(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z' || !hRef.current) return;
+      if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+      e.preventDefault();
+      apply(e.shiftKey ? redo(hRef.current) : undo(hRef.current));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { offState(); offMeter(); window.removeEventListener('keydown', onKey); };
   }, []);
 
-  if (!inApp) return <main><div className="banner">Open this inside the Rig app. The browser can't reach the audio engine.</div></main>;
-  if (!state) return null;
+  // The engine plays whatever is on the board, right away.
+  useEffect(() => {
+    if (h) call('setRig', compile(h.present));
+  }, [h?.present]);
 
-  const set = (key: keyof State, value: number) => {
-    setState({ ...state, [key]: value });
-    call('set', key, value);
+  // Autosave half a second after the last change.
+  useEffect(() => {
+    if (!h) return;
+    const t = setTimeout(() => call('saveRig', AUTOSAVE, JSON.stringify(h.present)), 500);
+    return () => clearTimeout(t);
+  }, [h?.present]);
+
+  if (!inApp) return <div className="banner">Open this inside the Rig app. The browser can't reach the audio engine.</div>;
+  if (!h || !audio) return null;
+
+  const setMaster = (value: number) => {
+    setAudio({ ...audio, volume: value });
+    call('set', 'volume', value);
   };
   const level = Math.max(0, Math.min(1, (20 * Math.log10(meter.peak || 1e-6) + 60) / 60));
   const clipping = performance.now() - clipAt < 1000;
-  const total = (state.inputMs ?? 0) + (state.outputMs ?? 0);
+  const latency = (audio.inputMs ?? 0) + (audio.outputMs ?? 0);
 
   return (
-    <main>
-      <section>
-        <h2>AUDIO</h2>
-        <p style={{ margin: 0 }}>
-          {state.device ?? 'No device'}
-          {state.sampleRate && <span className="dim"> · {state.sampleRate} Hz · {state.bufferSize} samples</span>}
-        </p>
-        <button onClick={() => call('openAudioSettings')}>Audio settings…</button>
-        {state.sampleRate && (
-          <p className="dim" style={{ margin: 0 }}>
-            Round-trip latency: <b>{total.toFixed(1)} ms</b> = input {state.inputMs!.toFixed(1)} + output {state.outputMs!.toFixed(1)}
-            {' '}· CPU {Math.round(meter.cpu * 100)}%
-          </p>
-        )}
-      </section>
-      <section>
-        <h2>GUITAR INPUT</h2>
-        <label>
-          Channel
-          <select value={state.channel} onChange={(e) => set('channel', Number(e.target.value))}>
-            {(state.inputs ?? []).map((name, i) => <option key={i} value={i}>{name}</option>)}
+    <div className="app">
+      <header className="toolbar">
+        <div className="group" role="group" aria-label="View">
+          <button aria-pressed={view === 'board'} onClick={() => setView('board')}>Board</button>
+          <button aria-pressed={view === 'grid'} onClick={() => setView('grid')}>Grid</button>
+        </div>
+        <div className="group">
+          <button disabled={!h.past.length} onClick={() => apply(undo(h))} title="Cmd+Z">Undo</button>
+          <button disabled={!h.future.length} onClick={() => apply(redo(h))} title="Shift+Cmd+Z">Redo</button>
+        </div>
+        <div className="group">
+          <select value="" aria-label="Load preset" onChange={(e) => {
+            const [kind, n] = [e.target.value.slice(0, 1), e.target.value.slice(2)];
+            if (kind === 'b') { edit(() => PRESETS[n]()); setName(''); return; }
+            setName(n);
+            call<string | null>('loadRig', n).then(open);
+          }}>
+            <option value="" disabled>Load preset…</option>
+            <optgroup label="Built-in">
+              {Object.keys(PRESETS).map((p) => <option key={p} value={`b:${p}`}>{p}</option>)}
+            </optgroup>
+            {presets.length > 0 && (
+              <optgroup label="Saved">
+                {presets.map((p) => <option key={p} value={`u:${p}`}>{p}</option>)}
+              </optgroup>
+            )}
           </select>
-          <span />
-        </label>
-        <label>
-          Trim
-          <input type="range" min={-24} max={24} step={0.5} value={state.trimDb} onChange={(e) => set('trimDb', Number(e.target.value))} />
-          <span>{state.trimDb > 0 ? '+' : ''}{state.trimDb} dB</span>
-        </label>
-        <label>
-          Level
-          <div className="meter" role="meter" aria-valuenow={Math.round(level * 100)} aria-valuemin={0} aria-valuemax={100}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Preset name" aria-label="Preset name" />
+          <button disabled={!name.trim()} onClick={async () => {
+            await call('saveRig', name.trim(), JSON.stringify(h.present));
+            refreshPresets();
+            flash(`Saved "${name.trim()}"`);
+          }}>Save</button>
+          <button disabled={!presets.includes(name.trim())} onClick={async () => {
+            await call('deleteRig', name.trim());
+            refreshPresets();
+            flash(`Deleted "${name.trim()}"`);
+          }}>Delete</button>
+          <button onClick={() => call<string | null>('importRig').then(open)}>Import…</button>
+          <button onClick={() => call<boolean>('exportRig', JSON.stringify(h.present, null, 2), name.trim() || 'rig')
+            .then((ok) => ok && flash('Exported'))}>Export…</button>
+        </div>
+        <div className="spacer" />
+        <div className="group">
+          <div className="meter small" role="meter" aria-label="Input level" aria-valuenow={Math.round(level * 100)} aria-valuemin={0} aria-valuemax={100}>
             <div style={{ width: `${level * 100}%` }} />
           </div>
           <div className={`led${clipping ? ' on' : ''}`} title="Clip" aria-label={clipping ? 'Clipping' : 'Not clipping'} />
-        </label>
-      </section>
-      <section>
-        <h2>OUTPUT</h2>
-        <label>
-          Volume
-          <input type="range" min={0} max={1} step={0.01} value={state.volume} onChange={(e) => set('volume', Number(e.target.value))} />
-          <span>{Math.round(state.volume * 100)}%</span>
-        </label>
-      </section>
-    </main>
+          <label className="inline">Master
+            <input type="range" min={0} max={1} step={0.01} value={audio.volume} onChange={(e) => setMaster(Number(e.target.value))} />
+          </label>
+        </div>
+        <div className="group dim">
+          {audio.sampleRate ? `${latency.toFixed(1)} ms · CPU ${Math.round(meter.cpu * 100)}%` : 'No audio device'}
+          <button onClick={() => call('openAudioSettings')}>Audio settings…</button>
+        </div>
+      </header>
+      <ReactFlowProvider>
+        <Board rig={h.present} view={view} edit={edit} flash={flash} inputs={audio.inputs ?? []} />
+      </ReactFlowProvider>
+      {toast && <div className="toast" role="status">{toast}</div>}
+    </div>
   );
 }

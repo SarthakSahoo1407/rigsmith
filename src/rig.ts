@@ -20,8 +20,9 @@ export type Device = {
 };
 export type Rig = { version: 1; devices: Record<string, Device>; cables: Cable[] };
 
+// Knob values go as an array in catalog order; a placed mic adds its position and distance.
 export type Compiled = {
-  nodes: { id: string; type: string; params: Record<string, number>; on: boolean }[];
+  nodes: { id: string; type: string; params: number[]; on: boolean }[];
   wires: { from: string; out: number; to: string; in: number }[];
 };
 
@@ -61,8 +62,10 @@ const update = (rig: Rig, id: string, change: Partial<Device>): Rig => ({
   devices: { ...rig.devices, [id]: { ...rig.devices[id], ...change } },
 });
 
-export const moveDevice = (rig: Rig, id: string, view: 'board' | 'grid', at: XY) =>
-  update(rig, id, { pos: { ...rig.devices[id].pos, [view]: at } });
+export function moveDevice(rig: Rig, id: string, view: 'board' | 'grid', at: XY): Rig {
+  const was = rig.devices[id].pos[view];
+  return was.x === at.x && was.y === at.y ? rig : update(rig, id, { pos: { ...rig.devices[id].pos, [view]: at } });
+}
 
 export const toggle = (rig: Rig, id: string) => update(rig, id, { on: !rig.devices[id].on });
 
@@ -77,7 +80,10 @@ export function placeMic(rig: Rig, micId: string, at?: MicPlacement): Rig {
   if (rig.devices[micId]?.type !== 'mic') throw new Error('Only mics can be placed on a cab');
   if (at && rig.devices[at.cab]?.type !== 'cab') throw new Error('Mics go on cabs');
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
-  return update(rig, micId, { mic: at && { cab: at.cab, x: clamp(at.x), y: clamp(at.y), distance: clamp(at.distance) } });
+  const mic = at && { cab: at.cab, x: clamp(at.x), y: clamp(at.y), distance: clamp(at.distance) };
+  const was = rig.devices[micId].mic;
+  if (mic === was || (mic && was && JSON.stringify(mic) === JSON.stringify(was))) return rig; // no change, no undo step
+  return update(rig, micId, { mic });
 }
 
 export const isPowered = (rig: Rig, id: string) =>
@@ -160,7 +166,9 @@ export function compile(rig: Rig): Compiled {
     out.wires.push({ from: a.node, out: a.index, to: b.node, in: b.index });
 
   for (const d of live) {
-    const base = { params: d.params, on: d.on };
+    const params = def(d.type).params.map((p) => d.params[p.name]);
+    if (d.mic) params.push(d.mic.x, d.mic.distance);
+    const base = { params, on: d.on };
     const parts = def(d.type).parts;
     if (parts) for (const p of parts) out.nodes.push({ id: `${d.id}/${p.suffix}`, type: `${d.type}/${p.suffix}`, ...base });
     else out.nodes.push({ id: d.id, type: d.type, ...base });

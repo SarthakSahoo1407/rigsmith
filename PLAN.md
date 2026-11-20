@@ -7,7 +7,7 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 | Topic | Decision |
 |---|---|
 | Platform | JUCE 8 desktop app (C++, CMake). The UI is Vite + React + TypeScript running in JUCE's web view. Switched from the browser after Chrome measured ~14 ms reported (more in reality) with the interface; native targets 3–6 ms. |
-| Audio | JUCE `AudioDeviceManager` + `AudioProcessorGraph`. Built-in `juce_dsp` pieces first (IIR filters, WaveShaper, Convolution, Compressor, DelayLine, Oscillator); plain C++ processors where none exists (noise gate, octave, looper). |
+| Audio | JUCE `AudioDeviceManager` + a small node graph of our own (`native/Engine.h`). Built-in `juce_dsp` pieces first (IIR filters, WaveShaper, Convolution, Compressor, DelayLine, Oscillator); plain C++ processors where none exists (noise gate, octave, looper). |
 | Guitar input | Audio interface, chosen in JUCE's Audio Settings dialog (device, sample rate, buffer size, enabled channels). No MIDI. |
 | Monitoring | Wired headphones/monitors on the interface. Bluetooth is too slow for live playing. |
 | Amp realism | Built-in nodes now (WaveShaper + tone stack + cab filters). NAM neural captures later, swapped inside the amp device only. |
@@ -30,7 +30,7 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 5. A hidden, non-removable limiter sits on the final output.
 6. **Amp effects loop is normalled like a real amp:** with nothing in Return, the signal passes through the amp internally. A cable in Return breaks the internal path and feeds the power amp. A cable in Send alone is just a copy (tap) of the preamp signal.
 7. An amp with nothing on its speaker out is silent ("no load" warning).
-8. **Mics are placed, not cabled.** Drag a mic onto a cab's speaker; position (center brighter, edge darker) and distance (closer = more bass, further = quieter + small delay) are set by dragging. Several mics per cab are allowed. The mic's XLR output jack goes to the Output device. A cab without a mic is silent.
+8. **Mics are placed, not cabled.** Drag a mic onto a cab's speaker; position (center brighter, edge darker) and distance (closer = more bass, further = quieter + small delay) are two knobs on the placed mic. Dragging a mic off its cab detaches it. Several mics per cab are allowed. The mic's XLR output jack goes to the Output device. A cab without a mic is silent.
 9. Any audio output may go straight to the Output (DI / amp-less path).
 10. No limit on device count. The ceiling is CPU; an audio glitch shows a warning.
 
@@ -69,7 +69,7 @@ Pure functions in `rig.ts`: `canConnect(rig, from, to)` (rules 1, 3 and 4; cycle
 
 - `AudioDeviceManager` runs the interface. Settings come from JUCE's `AudioDeviceSelectorComponent` dialog.
 - Bridge: JUCE web view native functions (`getState`, `set`, `openAudioSettings`, later `setRig`, `setParam`) and events pushed to the UI (`state`, `meter` at 30 Hz). `src/native.ts` is the JS side.
-- `setRig(compiled)` diffs nodes and wires into an `AudioProcessorGraph`. Each cable fades over 5 ms on connect/disconnect.
+- `setRig(compiled)` reuses nodes by id, topologically sorts them, and hands the new graph to the audio thread, which swaps it in between blocks with a one-block fade out/in. A knob or footswitch change with the same nodes and wires only updates atomics, no rebuild. `native/check.cpp` (`RigCheck`) renders rigs offline and asserts on the output.
 - Knob changes go through `SmoothedValue`, so no zipper noise. Audio-thread values are atomics; no locks or allocation on the audio thread.
 - A footswitch crossfades between the effect and a dry bypass path. An unpowered device outputs silence.
 - **Guitar Input** device: input channel (among the enabled ones), trim, level meter, clip LED. Trim is the calibration knob.
@@ -120,7 +120,10 @@ src/native.ts       JUCE bridge (call / on)
 src/App.tsx         React Flow canvas, Board/Grid toggle, toolbar, hotkeys, undo
 src/devices/*.tsx   board and grid look per device (split only when App.tsx gets too long)
 native/CMakeLists.txt  fetches JUCE 8.0.15, builds Rig.app, bundles dist/
-native/Main.cpp     app, window, bridge, engine, device processors (split when it grows)
+native/Main.cpp     app, window, bridge, settings, rig storage
+native/Engine.h     graph, node types, biquad, oversampled shaper
+native/check.cpp    offline engine check (RigCheck)
+src/presets.ts      built-in rigs
 ```
 
 ## Phases (each ends with something playable)

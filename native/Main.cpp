@@ -1,63 +1,11 @@
-// Rig: native audio engine (JUCE) + React UI in a web view.
-// Phase 1: guitar input channel → trim → master → safety limiter → all outputs.
+// Rig: native audio engine (JUCE) + React UI in a web view. The UI owns the rig and sends it
+// compiled (src/rig.ts compile()) to the engine (Engine.h).
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+#include "Engine.h"
 
 using namespace juce;
-
-// Safety limiter as a zero-latency soft clipper: linear below the knee, tanh above,
-// never exceeds ±1.
-static float softClip (float x)
-{
-    constexpr float k = 0.7f;
-    const float a = std::abs (x);
-    return a <= k ? x : std::copysign (k + (1.0f - k) * std::tanh ((a - k) / (1.0f - k)), x);
-}
-
-struct Engine : AudioIODeviceCallback
-{
-    // Written by the message thread, read by the audio thread.
-    std::atomic<float> trimTarget { 1.0f }, masterTarget { 0.5f };
-    std::atomic<int> channel { 0 };
-    // Written by the audio thread, read and reset by the meter timer.
-    std::atomic<float> peak { 0.0f };
-
-    void audioDeviceAboutToStart (AudioIODevice* d) override
-    {
-        trim.reset (d->getCurrentSampleRate(), 0.02);
-        master.reset (d->getCurrentSampleRate(), 0.02);
-        trim.setCurrentAndTargetValue (trimTarget);
-        master.setCurrentAndTargetValue (masterTarget);
-    }
-
-    void audioDeviceStopped() override {}
-
-    void audioDeviceIOCallbackWithContext (const float* const* in, int numIn, float* const* out, int numOut,
-                                           int n, const AudioIODeviceCallbackContext&) override
-    {
-        trim.setTargetValue (trimTarget);
-        master.setTargetValue (masterTarget);
-        const int ch = channel;
-        const float* src = ch < numIn ? in[ch] : nullptr; // `in` holds only the enabled input channels
-        float p = 0.0f;
-
-        for (int i = 0; i < n; ++i)
-        {
-            const float x = src != nullptr ? src[i] * trim.getNextValue() : 0.0f;
-            p = std::max (p, std::abs (x));
-            const float y = softClip (x * master.getNextValue());
-            for (int c = 0; c < numOut; ++c)
-                if (out[c] != nullptr)
-                    out[c][i] = y;
-        }
-
-        for (float prev = peak; p > prev && ! peak.compare_exchange_weak (prev, p);) {}
-    }
-
-private:
-    SmoothedValue<float> trim, master;
-};
 
 class MainComponent : public Component, private Timer, private ChangeListener
 {
@@ -71,9 +19,7 @@ public:
         props.setStorageParameters (o);
 
         auto* s = settings();
-        engine.trimTarget = Decibels::decibelsToGain ((float) s->getDoubleValue ("trimDb", 0.0));
         engine.masterTarget = (float) s->getDoubleValue ("volume", 0.5);
-        engine.channel = s->getIntValue ("channel", 0);
 
         auto audioXml = s->getXmlValue ("audio");
         deviceManager.initialise (2, 2, audioXml.get(), true);
@@ -100,12 +46,13 @@ public:
 private:
     ApplicationProperties props;
     AudioDeviceManager deviceManager;
-    Engine engine;
+    rig::Engine engine;
     WebBrowserComponent web { WebBrowserComponent::Options {}
         .withNativeIntegrationEnabled()
         .withResourceProvider ([] (const String& url) { return serveUi (url); })
         .withNativeFunction ("getState", [this] (const Array<var>&, auto complete) { complete (state()); })
         .withNativeFunction ("set", [this] (const Array<var>& a, auto complete) { set (a[0].toString(), a[1]); complete ({}); })
+        .withNativeFunction ("setRig", [this] (const Array<var>& a, auto complete) { engine.setRig (a[0]); complete ({}); })
         .withNativeFunction ("openAudioSettings", [this] (const Array<var>&, auto complete) { openAudioSettings(); complete ({}); })
         // Rig storage. The UI validates rig JSON (parseRig); this side only moves text.
         .withNativeFunction ("listRigs", [] (const Array<var>&, auto complete) { complete (listRigs()); })
@@ -172,9 +119,7 @@ private:
     {
         auto* o = new DynamicObject();
         auto* s = settings();
-        o->setProperty ("trimDb", s->getDoubleValue ("trimDb", 0.0));
         o->setProperty ("volume", s->getDoubleValue ("volume", 0.5));
-        o->setProperty ("channel", engine.channel.load());
 
         if (auto* d = deviceManager.getCurrentAudioDevice())
         {
@@ -199,23 +144,11 @@ private:
 
     void set (const String& key, const var& v)
     {
-        const double x = v;
-        if (key == "trimDb")
+        if (key == "volume")
         {
-            const double db = jlimit (-24.0, 24.0, x);
-            engine.trimTarget = Decibels::decibelsToGain ((float) db);
-            settings()->setValue (key, db);
-        }
-        else if (key == "volume")
-        {
-            const double vol = jlimit (0.0, 1.0, x);
+            const double vol = jlimit (0.0, 1.0, (double) v);
             engine.masterTarget = (float) vol;
             settings()->setValue (key, vol);
-        }
-        else if (key == "channel")
-        {
-            engine.channel = jmax (0, (int) x);
-            settings()->setValue (key, engine.channel.load());
         }
     }
 
@@ -245,6 +178,7 @@ private:
         o->setProperty ("peak", engine.peak.exchange (0.0f));
         o->setProperty ("cpu", deviceManager.getCpuUsage());
         web.emitEventIfBrowserIsVisible ("meter", var (o));
+        engine.collectGarbage();
     }
 
     // Serves the built React UI from Rig.app/Contents/Resources/ui.

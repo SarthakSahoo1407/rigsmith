@@ -105,6 +105,7 @@ describe('compile', () => {
     rig = placeMic(rig, 'mic-1', { cab: 'cab-1', x: 0.3, y: 0.5, distance: 0.1 });
     rig = connect(rig, j('mic-1', 'out'), j('output-1', 'L'));
     expect(compile(rig).nodes.map((n) => `${n.id}=${n.type}`)).toContain('amp-1/pre=amp/pre');
+    expect(compile(rig).nodes.find((n) => n.id === 'mic-1')!.params).toEqual([0, 0.3, 0.1]);
     expect(wires(rig)).toEqual([
       'amp-1/power:0>cab-1:0', 'amp-1/pre:0>amp-1/power:0', 'cab-1:0>mic-1:0',
       'input-1:0>amp-1/pre:0', 'mic-1:0>output-1:0', 'mic-1:0>output-1:1',
@@ -189,5 +190,20 @@ describe('rig files', () => {
   it('fills missing params with defaults and clamps bad ones', () => {
     const rig = parseRig(JSON.stringify({ version: 1, cables: [], devices: { b: { id: 'b', type: 'boost', params: { gain: 1e9, treble: 'x' } } } }));
     expect(rig.devices.b.params).toEqual({ gain: 24, treble: 0 });
+  });
+});
+
+describe('built-in presets', async () => {
+  const { PRESETS } = await import('./presets');
+  it.each(Object.keys(PRESETS))('%s builds, round-trips and reaches the output', (name) => {
+    const rig = PRESETS[name]();
+    expect(parseRig(JSON.stringify(rig))).toEqual(rig);
+    const { wires } = compile(rig);
+    const reached = new Set(['input-1']);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const w of wires) if (reached.has(w.from) && !reached.has(w.to)) { reached.add(w.to); grew = true; }
+    }
+    expect(reached).toContain('output-1');
   });
 });

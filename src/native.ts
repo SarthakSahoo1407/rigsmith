@@ -32,9 +32,7 @@ export function on<T>(event: string, fn: (payload: T) => void) {
 }
 
 export type State = {
-  trimDb: number;
   volume: number;
-  channel: number;
   device?: string;
   inputs?: string[];
   sampleRate?: number;
