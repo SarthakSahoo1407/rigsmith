@@ -200,10 +200,16 @@ inline const AmpModel& ampModel (float p0) { return AMPS[(size_t) jlimit (0, (in
 
 // Amp preamp: input filter and bright cap, then every gain stage at 8x oversampling with
 // interstage coupling (highpass) and treble roll-off (lowpass), then the tone stack. Output = the Send jack.
-struct AmpPre : Node // p: model, gain, bass, mid, treble, presence, master
+// Amp controls in catalog order (src/catalog.ts). The drive channel uses the original gain/EQ knobs
+// so v1 rigs sound the same; clean and lead have their own.
+enum AmpParam { Model, Gain, Bass, Mid, Treble, Presence, Master, Channel, Bright, Deep, Fat, Tube, Bias, Sag, Variac,
+                CleanGain, CleanBass, CleanMid, CleanTreble, LeadGain, LeadBass, LeadMid, LeadTreble };
+
+// Channels: clean is one gentle stage, drive is the model as voiced, lead adds a stage and 8 dB.
+struct AmpPre : Node // p: AmpParam
 {
     AmpPre() : Node (1, 1) {}
-    Biquad inHp, bright, bass, mid, treble;
+    Biquad inHp, bright, fat, bass, mid, treble;
     std::array<Biquad, 4> stHp, stLp;
     Shaper shaper { 3 };
     float inGain = 1, inter = 1, bias = 0, biasOffset = 0;
@@ -212,28 +218,34 @@ struct AmpPre : Node // p: model, gain, bass, mid, treble, presence, master
     void prepare (int maxBlock) override { shaper.prepare (maxBlock); }
     void retune() override
     {
-        const auto& m = ampModel (p[0]);
+        const auto& m = ampModel (p[Model]);
         const double os = shaper.rate (sr);
-        stages = m.stages;
-        inGain = dbToGain (m.gainLoDb + p[1] / 10.0f * (m.gainHiDb - m.gainLoDb));
+        const int ch = jlimit (0, 2, (int) p[Channel]);
+        auto knob = [&] (int i) { return (float) p[(size_t) (ch == 1 ? i : (ch == 0 ? CleanGain : LeadGain) + i - Gain)]; };
+        const float g = knob (Gain);
+        stages = ch == 0 ? 1 : ch == 2 ? std::min (4, m.stages + 1) : m.stages;
+        inGain = ch == 0 ? dbToGain (m.gainLoDb - 6 + g / 10.0f * 18.0f)
+                         : dbToGain (m.gainLoDb + g / 10.0f * (m.gainHiDb - m.gainLoDb) + (ch == 2 ? 8.0f : 0.0f));
         inter = dbToGain (m.interDb);
         bias = m.bias;
         biasOffset = std::tanh (bias);
         inHp.set (Biquad::HighPass, sr, m.inHp);
-        bright.set (Biquad::HighShelf, sr, 2000, 0.6, m.brightDb * (1.0f - p[1] / 20.0f)); // a bright cap matters less as gain rises
+        // A bright cap matters less as gain rises; the Bright switch adds one on top of the model's own.
+        bright.set (Biquad::HighShelf, sr, 2000, 0.6, (m.brightDb + (p[Bright] > 0.5f ? 6.0f : 0.0f)) * (1.0f - g / 20.0f));
+        fat.set (Biquad::Peak, sr, 700, 0.8, p[Fat] > 0.5f ? 6.0 : 0.0); // mid push into the first stage
         for (size_t s = 0; s < stHp.size(); ++s)
         {
             stHp[s].set (Biquad::HighPass, os, s == 0 ? m.stageHp * 0.5f : m.stageHp);
             stLp[s].set (Biquad::LowPass, os, m.stageLp);
         }
-        bass.set (Biquad::LowShelf, sr, m.bassLiftDb > 3 ? 250 : m.bassHz, 0.7, (p[2] - 5) * 2.4 + m.bassLiftDb);
-        mid.set (Biquad::Peak, sr, m.midHz, m.midQ, (p[3] - 5) * 2.4 + m.midBiasDb);
-        treble.set (Biquad::HighShelf, sr, m.trebleHz, 0.7, (p[4] - 5) * 2.4);
+        bass.set (Biquad::LowShelf, sr, m.bassLiftDb > 3 ? 250 : m.bassHz, 0.7, (knob (Bass) - 5) * 2.4 + m.bassLiftDb);
+        mid.set (Biquad::Peak, sr, m.midHz, m.midQ, (knob (Mid) - 5) * 2.4 + m.midBiasDb);
+        treble.set (Biquad::HighShelf, sr, m.trebleHz, 0.7, (knob (Treble) - 5) * 2.4);
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
         float* x = out[0];
-        for (int i = 0; i < n; ++i) x[i] = bright (inHp (in[0][i])) * inGain;
+        for (int i = 0; i < n; ++i) x[i] = fat (bright (inHp (in[0][i]))) * inGain;
         shaper.run (x, n, [this] (float v) {
             for (int s = 0; s < stages; ++s)
             {
@@ -249,32 +261,56 @@ struct AmpPre : Node // p: model, gain, bass, mid, treble, presence, master
 
 // Amp power section: Return jack in, speaker jack out. The master pushes the power tubes; the supply
 // sags as you play harder; the speaker's resonance (depth) and the presence control shape the result.
-struct AmpPower : Node
+// Tube type, bias, sag and supply voltage change how and when it breaks up:
+//   EL34 mid-forward and earlier, 6L6 more headroom and scooped, KT88 most headroom, EL84 early and chimey.
+//   Cold bias leaves a crossover gap (raspy); hot bias adds even harmonics and squash.
+//   Lower voltage breaks up sooner and quieter.
+struct AmpPower : Node // p: AmpParam
 {
     AmpPower() : Node (1, 1) {}
-    Biquad depth, presence;
+    struct TubeType { float drive, asym, eqHz, eqDb, sag; };
+    static constexpr TubeType TUBES[] = { { 1, 0, 1000, 0, 0 }, { 1.15f, .06f, 1100, 2, 0 }, { .8f, .02f, 600, -1.5f, 0 }, { .6f, .01f, 120, 1.5f, 0 }, { 1.5f, .1f, 2200, 2.5f, .15f } };
+    Biquad depth, presence, tubeEq, deep;
     Envelope env;
     SmoothedValue<float> drive;
-    float sag = 0, trim = 1;
+    float sag = 0, trim = 1, asym = 0, gap = 0, volts = 1;
 
-    float driveFor() const { const float m = p[6] / 10.0f; return (0.08f + m * m * 3.0f) * ampModel (p[0]).powerDrive; }
+    const TubeType& tube() const { return TUBES[(size_t) jlimit (0, 4, (int) p[Tube])]; }
+    float driveFor() const
+    {
+        const float m = p[Master] / 10.0f, v = jlimit (0.8f, 1.1f, (float) p[Variac] / 100.0f);
+        return (0.08f + m * m * 3.0f) * ampModel (p[Model]).powerDrive * tube().drive / (v * v);
+    }
     void prepare (int) override { drive.reset (sr, 0.03); drive.setCurrentAndTargetValue (driveFor()); env.set (sr, 5, 150); }
     void retune() override
     {
-        const auto& m = ampModel (p[0]);
+        const auto& m = ampModel (p[Model]);
+        const auto& t = tube();
+        const float b = (p[Bias] - 5) / 5.0f; // -1 cold .. +1 hot
         depth.set (Biquad::Peak, sr, m.depthHz, 0.9, m.depthDb);
-        presence.set (Biquad::HighShelf, sr, m.presenceHz, 0.7, (p[5] - 5) * 2.0);
-        sag = m.sag;
-        trim = m.trim;
+        presence.set (Biquad::HighShelf, sr, m.presenceHz, 0.7, (p[Presence] - 5) * 2.0);
+        tubeEq.set (Biquad::Peak, sr, t.eqHz, 0.8, t.eqDb);
+        deep.set (Biquad::LowShelf, sr, 90, 0.7, p[Deep] > 0.5f ? 5.0 : 0.0);
+        sag = (m.sag + t.sag) * (p[Sag] / 5.0f) * (1.0f + 0.3f * std::max (0.0f, b));
+        asym = 0.05f + t.asym + 0.08f * std::max (0.0f, b);
+        gap = 0.03f * std::max (0.0f, -b);
+        volts = jlimit (0.8f, 1.1f, (float) p[Variac] / 100.0f);
+        // Level-match the channels (measured with RigRender): clean runs one gentle stage, so it's
+        // about 7 dB quieter; lead on a one-stage clean model jumps the most.
+        const int ch = jlimit (0, 2, (int) p[Channel]);
+        trim = m.trim * (ch == 0 ? 2.2f : ch == 2 ? (m.stages == 1 ? 0.5f : m.stages == 2 ? 0.9f : 1.0f) : 1.0f);
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
         drive.setTargetValue (driveFor());
+        const float offset = std::tanh (asym);
         for (int i = 0; i < n; ++i)
         {
             const float g = drive.getNextValue() / (1.0f + sag * 3.0f * env (in[0][i]));
-            const float y = std::tanh (in[0][i] * g + 0.05f) - 0.04996f;
-            out[0][i] = presence (depth (y)) * trim * 0.8f;
+            float x = in[0][i] * g;
+            if (gap > 0) x = x > 0 ? std::max (0.0f, x - gap) : std::min (0.0f, x + gap); // crossover gap of a cold bias
+            const float y = std::tanh (x + asym) - offset;
+            out[0][i] = deep (presence (depth (tubeEq (y)))) * trim * 0.8f * volts;
         }
     }
 };
@@ -282,11 +318,16 @@ struct AmpPower : Node
 // Speaker cab as an impulse response, the way modern amp sims do it: the cab size sets the low end
 // (a closed 4x12 thumps around 100 Hz, an open 1x12 loses it), the speaker sets mids and highs and
 // how steeply they fall above 5-7 kHz, and seeded cone break-up ripple keeps it from sounding like EQ.
-struct Cab : Node // p: size (1x12, 2x12, 4x12), speaker
+// Or real IRs: source = IR plays slot A, or A and B blended. Low and high cut apply to both.
+struct Cab : Node // p: size (1x12, 2x12, 4x12), speaker, source (modelled / IR), blend, low cut Hz, high cut Hz
 {
     Cab() : Node (1, 1) {}
-    dsp::Convolution conv;
+    dsp::Convolution conv, irA, irB;
+    std::vector<float> other;
+    Biquad low1, low2, high1, high2;
     int loaded = -1;
+    String loadedA = "\x01", loadedB = "\x01";
+    std::atomic<bool> hasA { false }, hasB { false };
 
     static Curve curveFor (int size, int speaker)
     {
@@ -305,26 +346,69 @@ struct Cab : Node // p: size (1x12, 2x12, 4x12), speaker
         for (const auto& pt : highs[jlimit (0, 3, speaker)]) c.push_back (pt);
         return c;
     }
-    void prepare (int maxBlock) override { conv.prepare ({ sr, (uint32) maxBlock, 1 }); loaded = -1; }
+    void prepare (int maxBlock) override
+    {
+        for (auto* c : { &conv, &irA, &irB }) c->prepare ({ sr, (uint32) maxBlock, 1 });
+        other.assign ((size_t) maxBlock, 0.0f);
+        loaded = -1;
+        loadedA = loadedB = "\x01";
+    }
     void configure() override
     {
         const int size = jlimit (0, 2, (int) p[0]), speaker = jlimit (0, 3, (int) p[1]), key = size * 4 + speaker;
-        if (key == loaded) return;
-        loaded = key;
-        conv.loadImpulseResponse (designIr (sr, (int) (sr * 0.05), curveFor (size, speaker), 2.5f, 900, 17 + key), sr,
-                                  dsp::Convolution::Stereo::no, dsp::Convolution::Trim::no, dsp::Convolution::Normalise::no);
+        if (key != loaded)
+        {
+            loaded = key;
+            conv.loadImpulseResponse (designIr (sr, (int) (sr * 0.05), curveFor (size, speaker), 2.5f, 900, 17 + key), sr,
+                                      dsp::Convolution::Stereo::no, dsp::Convolution::Trim::no, dsp::Convolution::Normalise::no);
+        }
+        auto load = [this] (dsp::Convolution& c, const char* slot, String& was, std::atomic<bool>& has) {
+            const auto it = files.find (slot);
+            const String path = it != files.end() ? it->second : String();
+            if (path == was) return;
+            was = path;
+            has = File (path).existsAsFile();
+            if (has) c.loadImpulseResponse (File (path), dsp::Convolution::Stereo::no, dsp::Convolution::Trim::yes, 0, dsp::Convolution::Normalise::yes);
+        };
+        load (irA, "irA", loadedA, hasA);
+        load (irB, "irB", loadedB, hasB);
+    }
+    void retune() override
+    {
+        low1.set (Biquad::HighPass, sr, jlimit (10.0f, 400.0f, (float) p[4]), 0.54);
+        low2.set (Biquad::HighPass, sr, jlimit (10.0f, 400.0f, (float) p[4]), 1.31);
+        high1.set (Biquad::LowPass, sr, jlimit (2000.0f, 20000.0f, (float) p[5]), 0.54);
+        high2.set (Biquad::LowPass, sr, jlimit (2000.0f, 20000.0f, (float) p[5]), 1.31);
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
+        auto run = [n] (dsp::Convolution& c, float* x) {
+            dsp::AudioBlock<float> block (&x, 1, (size_t) n);
+            c.process (dsp::ProcessContextReplacing<float> (block));
+        };
         FloatVectorOperations::copy (out[0], in[0], n);
-        dsp::AudioBlock<float> block (const_cast<float**> (out), 1, (size_t) n);
-        conv.process (dsp::ProcessContextReplacing<float> (block));
+        const bool ir = p[2] > 0.5f && (hasA || hasB);
+        if (! ir) run (conv, out[0]);
+        else if (hasA && hasB)
+        {
+            FloatVectorOperations::copy (other.data(), in[0], n);
+            run (irA, out[0]);
+            run (irB, other.data());
+            const float b = jlimit (0.0f, 1.0f, (float) p[3]);
+            for (int i = 0; i < n; ++i) out[0][i] = (1 - b) * out[0][i] + b * other[(size_t) i];
+        }
+        else run (hasA ? irA : irB, out[0]);
+        // JUCE normalises loaded IRs to about 1/8 of full scale; bring them up to the modelled cab's level.
+        const float level = ir ? 2.8f : 1.0f;
+        for (int i = 0; i < n; ++i) out[0][i] = high2 (high1 (low2 (low1 (out[0][i])))) * level;
     }
 };
 
-// Mic on a cab: model EQ; position across the speaker darkens toward the edge;
-// distance lowers level, removes proximity bass and adds up to 2 ms delay (comb filtering with other mics).
-struct Mic : Node // p: model, position 0..1, distance 0..1
+// Mic on a cab: model EQ; position across the speaker darkens toward the edge; angling it off-axis
+// darkens it further and softens the presence; distance lowers level, removes proximity bass and
+// adds up to 2 ms delay (comb filtering with other mics). Level, polarity and time-align are the
+// mixer channel's controls; pan and solo are applied by the cab's mic mixer (MicMix).
+struct Mic : Node // p: model, level dB, pan, phase, align ms, angle °, solo, then position 0..1, distance 0..1
 {
     Mic() : Node (1, 1) {}
     Biquad color, air, edge, proximity;
@@ -335,15 +419,15 @@ struct Mic : Node // p: model, position 0..1, distance 0..1
     void retune() override
     {
         const int m = (int) p[0];
-        const float x = p[1], d = p[2];
-        if (m == 0) color.set (Biquad::Peak, sr, 5000, 1.2, 2.5);           // dynamic: presence lift
-        else if (m == 1) color.set (Biquad::HighShelf, sr, 4000, 0.707, -6); // ribbon: dark, smooth
-        else color.set (Biquad::Peak, sr, 3000, 0.8, 1);                     // condenser: open
+        const float x = p[7], d = p[8], axis = 1.0f - jlimit (0.0f, 60.0f, (float) p[5]) / 90.0f;
+        if (m == 0) color.set (Biquad::Peak, sr, 5000, 1.2, 2.5 * axis);           // dynamic: presence lift
+        else if (m == 1) color.set (Biquad::HighShelf, sr, 4000, 0.707, -6);        // ribbon: dark, smooth
+        else color.set (Biquad::Peak, sr, 3000, 0.8, 1 * axis);                     // condenser: open
         air.set (Biquad::HighShelf, sr, 10000, 0.707, m == 2 ? 2 : 0);
-        edge.set (Biquad::LowPass, sr, 12000 * std::pow (3500.0 / 12000.0, x));
+        edge.set (Biquad::LowPass, sr, 12000 * std::pow (3500.0 / 12000.0, x) * (0.5 + 0.5 * axis));
         proximity.set (Biquad::LowShelf, sr, 150, 0.707, (m == 1 ? 6 : 3) * (1 - d));
-        gain = 1 - 0.6f * d;
-        delay = jlimit (0, (int) ring.size() - 1, (int) (d * 0.002 * sr));
+        gain = (1 - 0.6f * d) * dbToGain (p[1]) * (p[3] > 0.5f ? -1.0f : 1.0f);
+        delay = jlimit (0, (int) ring.size() - 1, (int) ((d * 0.002 + jlimit (0.0f, 3.0f, (float) p[4]) * 0.001) * sr));
     }
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
@@ -352,6 +436,25 @@ struct Mic : Node // p: model, position 0..1, distance 0..1
             ring[(size_t) write] = proximity (edge (air (color (in[0][i])))) * gain;
             out[0][i] = ring[(size_t) ((write - delay + (int) ring.size()) % (int) ring.size())];
             write = (write + 1) % (int) ring.size();
+        }
+    }
+};
+
+// The cab's mic mixer: up to four mics summed to a stereo bus (the cab's L/R outs), each with a
+// gain and a balance-law pan (centre = full level on both sides). Solo is resolved before it gets here.
+struct MicMix : Node // p: gain1, pan1, gain2, pan2, gain3, pan3, gain4, pan4
+{
+    MicMix() : Node (4, 2) {}
+    void render (const float* const* in, float* const* out, int n, IO&) override
+    {
+        FloatVectorOperations::clear (out[0], n);
+        FloatVectorOperations::clear (out[1], n);
+        for (int k = 0; k < 4; ++k)
+        {
+            const float g = p[(size_t) (2 * k)], pan = jlimit (-1.0f, 1.0f, (float) p[(size_t) (2 * k + 1)]);
+            if (std::abs (g) < 1e-9f) continue;
+            FloatVectorOperations::addWithMultiply (out[0], in[k], g * std::min (1.0f, 1.0f - pan), n);
+            FloatVectorOperations::addWithMultiply (out[1], in[k], g * std::min (1.0f, 1.0f + pan), n);
         }
     }
 };
@@ -1025,7 +1128,8 @@ inline std::shared_ptr<Node> makeNode (const String& type)
     else if (type == "fuzz") n = std::make_shared<Drive> (true);
     else if (type == "amp/pre") n = std::make_shared<AmpPre>();
     else if (type == "amp/power") n = std::make_shared<AmpPower>();
-    else if (type == "cab") n = std::make_shared<Cab>();
+    else if (type == "cab" || type == "cab/spk") n = std::make_shared<Cab>();
+    else if (type == "cab/mix") n = std::make_shared<MicMix>();
     else if (type == "mic") n = std::make_shared<Mic>();
     else if (type == "tuner") n = std::make_shared<Tuner>();
     else if (type == "gate") n = std::make_shared<Gate>();

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DeviceType } from './catalog';
 import {
-  addDevice, canConnect, commit, compile, connect, emptyRig, history, insertIntoCable, isPowered, parseRig,
-  placeMic, powerUp, redo, removeDevice, replaceDevice, setParam, undo, type Rig,
+  addDevice, addScene, canConnect, commit, compile, connect, emptyRig, history, insertIntoCable, isPowered, linkParam, parseRig,
+  placeMic, powerUp, redo, removeDevice, removeScene, replaceDevice, selectScene, setFile, setParam, toggle, undo, type Rig,
 } from './rig';
 
 const at = { x: 0, y: 0 };
@@ -113,10 +113,11 @@ describe('compile', () => {
     rig = placeMic(rig, 'mic-1', { cab: 'cab-1', x: 0.3, y: 0.5, distance: 0.1 });
     rig = connect(rig, j('mic-1', 'out'), j('output-1', 'L'));
     expect(compile(rig).nodes.map((n) => `${n.id}=${n.type}`)).toContain('amp-1/pre=amp/pre');
-    expect(compile(rig).nodes.find((n) => n.id === 'mic-1')!.params).toEqual([0, 0.3, 0.1]);
+    // mic: model, level, pan, phase, align, angle, solo, then position and distance
+    expect(compile(rig).nodes.find((n) => n.id === 'mic-1')!.params).toEqual([0, 0, 0, 0, 0, 0, 0, 0.3, 0.1]);
     expect(wires(rig)).toEqual([
-      'amp-1/power:0>cab-1:0', 'amp-1/pre:0>amp-1/power:0', 'cab-1:0>mic-1:0',
-      'input-1:0>amp-1/pre:0', 'mic-1:0>output-1:0', 'mic-1:0>output-1:1',
+      'amp-1/power:0>cab-1/spk:0', 'amp-1/pre:0>amp-1/power:0', 'cab-1/spk:0>mic-1:0',
+      'input-1:0>amp-1/pre:0', 'mic-1:0>cab-1/mix:0', 'mic-1:0>output-1:0', 'mic-1:0>output-1:1',
     ]);
 
     rig = connect(rig, j('power-1', '1'), j('delay-1', 'dc'));
@@ -133,6 +134,120 @@ describe('compile', () => {
     rig = connect(rig, j('input-1', 'out'), j('amp-1', 'in'));
     rig = connect(rig, j('amp-1', 'speaker'), j('cab-1', 'in'));
     expect(wires(rig).filter((w) => w.startsWith('cab-1'))).toEqual([]);
+  });
+});
+
+describe('cab mic mixer', () => {
+  it('sums the cab mics to its L/R outs with pan, and solo silences the rest', () => {
+    let [rig] = build('amp', 'cab', 'mic', 'mic', 'output');
+    rig = connect(rig, j('amp-1', 'speaker'), j('cab-1', 'in'));
+    rig = placeMic(rig, 'mic-1', { cab: 'cab-1', x: 0.3, y: 0.75, distance: 0.1 });
+    rig = placeMic(rig, 'mic-2', { cab: 'cab-1', x: 0.5, y: 0.25, distance: 0.2 });
+    rig = connect(rig, j('cab-1', 'outL'), j('output-1', 'L'));
+    rig = connect(rig, j('cab-1', 'outR'), j('output-1', 'R'));
+    rig = setParam(rig, 'mic-1', 'pan', -1);
+    const mix = () => compile(rig).nodes.find((n) => n.id === 'cab-1/mix')!.params;
+    expect(mix()).toEqual([1, -1, 1, 0, 0, 0, 0, 0]);
+    expect(wires(rig)).toEqual(expect.arrayContaining(['mic-1:0>cab-1/mix:0', 'mic-2:0>cab-1/mix:1', 'cab-1/mix:0>output-1:0', 'cab-1/mix:1>output-1:1']));
+    rig = setParam(rig, 'mic-2', 'solo', 1);
+    expect(mix()).toEqual([0, -1, 1, 0, 0, 0, 0, 0]);
+  });
+
+  it('refuses a loop through the mic mixer', () => {
+    let [rig] = build('amp', 'cab', 'mic');
+    rig = connect(rig, j('amp-1', 'speaker'), j('cab-1', 'in'));
+    rig = placeMic(rig, 'mic-1', { cab: 'cab-1', x: 0.3, y: 0.75, distance: 0.1 });
+    expect(canConnect(rig, j('cab-1', 'outL'), j('amp-1', 'in'))).toMatch(/loop/);
+  });
+});
+
+describe('scenes', () => {
+  const rigWithScenes = () => {
+    let [rig] = build('input', 'distortion', 'delay', 'output', 'power');
+    rig = connect(rig, j('input-1', 'out'), j('distortion-1', 'in'));
+    rig = connect(rig, j('distortion-1', 'out'), j('delay-1', 'in'));
+    rig = connect(rig, j('delay-1', 'outL'), j('output-1', 'L'));
+    rig = powerUp(powerUp(rig, 'distortion-1'), 'delay-1');
+    rig = toggle(rig, 'distortion-1'); // off in the base
+    return addScene(rig, 'Lead'); // scene A = current (drive off), scene B "Lead" active
+  };
+  const node = (rig: Rig, id: string) => compile(rig).nodes.find((n) => n.id === id)!;
+
+  it('each scene keeps its own footswitches', () => {
+    let rig = rigWithScenes();
+    expect(rig.scenes!.list.map((s) => s.name)).toEqual(['Scene A', 'Lead']);
+    rig = toggle(rig, 'distortion-1'); // drive on in Lead only
+    expect(node(rig, 'distortion-1').on).toBe(true);
+    rig = selectScene(rig, 0);
+    expect(node(rig, 'distortion-1').on).toBe(false);
+    expect(compile(rig).wires).toEqual(compile(selectScene(rig, 1)).wires); // switching scenes never re-cables
+  });
+
+  it('a linked knob is per scene, the rest are shared', () => {
+    let rig = linkParam(rigWithScenes(), 'delay-1', 'mix', true);
+    rig = setParam(rig, 'delay-1', 'mix', 0.6); // Lead
+    rig = setParam(rig, 'delay-1', 'time', 500); // shared
+    rig = selectScene(rig, 0);
+    expect(node(rig, 'delay-1').params[4]).toBe(0.35); // mix in scene A unchanged
+    expect(node(rig, 'delay-1').params[1]).toBe(500);
+    expect(node(selectScene(rig, 1), 'delay-1').params[4]).toBe(0.6);
+    rig = linkParam(rig, 'delay-1', 'mix', false); // shared again at scene A's value
+    expect(node(selectScene(rig, 1), 'delay-1').params[4]).toBe(0.35);
+  });
+
+  it('round-trips through a rig file and drops scenes with the last one', () => {
+    let rig = linkParam(rigWithScenes(), 'delay-1', 'mix', true);
+    rig = setParam(toggle(rig, 'distortion-1'), 'delay-1', 'mix', 0.7);
+    const back = parseRig(JSON.stringify(rig));
+    expect(back.scenes).toEqual(rig.scenes);
+    expect(compile(back)).toEqual(compile(rig));
+    const one = removeScene(rig, 0);
+    expect(one.scenes!.list.map((s) => s.name)).toEqual(['Lead']);
+    const none = removeScene(one, 0);
+    expect(none.scenes).toBeUndefined();
+    expect(compile(none)).toEqual(compile(rig)); // keeps what the last scene played
+  });
+
+  it('removing a device removes it from every scene', () => {
+    const rig = removeDevice(rigWithScenes(), 'distortion-1');
+    expect(rig.scenes!.list.every((s) => !('distortion-1' in s.on))).toBe(true);
+  });
+});
+
+describe('scene presets', async () => {
+  const { PRESETS } = await import('./presets');
+  it.each(Object.entries(PRESETS).filter(([, p]) => p.category === 'Scenes').map(([n]) => n))('%s: every scene plays something different', (name) => {
+    const rig = PRESETS[name].build();
+    expect(rig.scenes!.list.length).toBeGreaterThanOrEqual(3);
+    const sounds = rig.scenes!.list.map((_, i) => JSON.stringify(compile(selectScene(rig, i)).nodes));
+    expect(new Set(sounds).size).toBe(sounds.length);
+    const wires = rig.scenes!.list.map((_, i) => JSON.stringify(compile(selectScene(rig, i)).wires));
+    expect(new Set(wires).size).toBe(1); // scenes never re-cable, so switching is gapless
+  });
+});
+
+describe('mic placement on the cone', async () => {
+  const { micOffset, micPlacementAt } = await import('./layout');
+  it('turns a drag point into a placement and back', () => {
+    for (const [x, y] of [[0, 0.5], [0.4, 0.75], [1, 0.25], [0.7, 0.1]]) {
+      const o = micOffset(x, y, 100);
+      const back = micPlacementAt(o.x, o.y, 100);
+      expect(back.x).toBeCloseTo(x);
+      if (x > 0) expect(micOffset(back.x, back.y, 100).x).toBeCloseTo(o.x);
+    }
+    expect(micPlacementAt(300, 0, 100).x).toBe(1); // off the edge stays at the edge
+  });
+});
+
+describe('library files', () => {
+  it('compile passes library ids; rig files keep credits and refuse paths that leave the library', () => {
+    let [rig] = build('namAmp');
+    rig = setFile(rig, 'namAmp-1', 'model', { id: 'nam/Plexi.nam', name: 'Plexi', author: 'someone', license: 'cc-by', toneId: 42, source: 'tone3000' });
+    expect(compile(rig).nodes[0].files).toEqual({ model: 'nam/Plexi.nam' });
+    expect(parseRig(JSON.stringify(rig)).devices['namAmp-1'].files!.model).toMatchObject({ author: 'someone', license: 'cc-by', toneId: 42 });
+    const evil = JSON.parse(JSON.stringify(rig));
+    evil.devices['namAmp-1'].files.model.id = 'nam/../../secrets';
+    expect(parseRig(JSON.stringify(evil)).devices['namAmp-1'].files).toBeUndefined();
   });
 });
 

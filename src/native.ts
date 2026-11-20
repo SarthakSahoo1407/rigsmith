@@ -33,6 +33,8 @@ export function on<T>(event: string, fn: (payload: T) => void) {
 
 export type State = {
   volume: number;
+  plugin?: boolean; // running inside a DAW
+  t3kKey?: boolean; // a TONE3000 key is set
   device?: string;
   inputs?: string[];
   sampleRate?: number;

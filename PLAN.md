@@ -132,7 +132,12 @@ src/layout.ts       Board zones and slot placement, drag-to-reorder hints
 src/gear.tsx        Board look: stompboxes, treadles, amp head, cabs, mics, interface, power brick
 src/app.css         all styles
 native/CMakeLists.txt  fetches JUCE 8.0.15, builds Rig.app, bundles dist/
-native/Main.cpp     app, window, bridge, settings, rig storage, meters, standalone tuner
+native/Main.cpp     the app: audio device, settings dialog, window
+native/Plugin.cpp   the AU/VST3 plugin: processor and editor around the same engine and bridge
+native/Bridge.h     everything the UI calls (rig files, library, TONE3000, tuner, meters), shared by app and plugin
+native/Nam.h        NAM capture node (NeuralAmpModelerCore), loaded off the audio thread
+native/Library.h    captures and IRs on disk, with credits sidecars
+native/Tone3000.h   TONE3000 client: device-code sign-in, search, models, download
 native/RigFile.h    encrypted .rigsmith export format
 native/icon.png     app icon, an amp combo (drawn in native/art/icon.svg)
 native/Dsp.h        biquad, oversampled shaper, delay line, LFO, envelope, Node base
@@ -141,7 +146,12 @@ native/Engine.h     graph build, handover to the audio thread
 native/check.cpp    offline engine check (RigCheck)
 native/render.cpp   RigRender: a guitar part (synthesised or a DI .wav) through a compiled rig into a WAV, with tone balance
 scripts/render-presets.mts  `npm run render [di.wav]`: every preset to renders/*.wav
-src/presets.ts      built-in rigs
+src/presets.ts      built-in rigs, including scene, NAM and hybrid presets
+src/library.ts      the capture library and TONE3000 state as a small store; resolve() maps rig files to this Mac's
+src/Captures.tsx    Captures tab: library and the TONE3000 browser
+src/CabStudio.tsx   cab and mic studio
+src/Scenes.tsx      scene strip
+src/Live.tsx        Live mode
 ```
 
 ## Phases (each ends with something playable)
@@ -153,15 +163,25 @@ src/presets.ts      built-in rigs
 5. **Full catalog.** Done: every device has a sound model; realistic Board look; tuner readout and looper controls stream from the engine (`live` event, 10 Hz); 21 built-in presets in six categories (Clean, Acoustic, Crunch, Lead, Metal, Ambient).
 6. **Play it.** Hotkeys, footswitch feel, glitch warning, a release build of `Rig.app`.
 
-## Later (not in v1)
+## v2 (done)
 
-- NAM neural amp/pedal captures (native NAM C++ core inside the amp processor)
-- VST/AU plugin build
+- **NAM:** `namAmp` (into a cab), `namRig` (amp + cab capture, line out) and `namPedal` blocks run NeuralAmpModelerCore at the commit pinned in CMake. Output is normalised to −18 dB from the file's loudness. A capture at a different rate warns; it isn't resampled.
+- **Library and TONE3000:** files live in `Application Support/Rig/Library/{nam,ir}` with a credits sidecar. Devices store a `FileRef` (library id + creator, license, tone). The TONE3000 client follows the API terms: download only on request, keep credits, "Powered by TONE3000", no bundling. Presets reference tones by id and `resolve()` maps them to downloaded files.
+- **Scenes:** `Rig.scenes` = up to 8 scenes, each `{ on, params }`. Footswitches are per scene; knobs are per scene only when linked. `applyScene()` gives what plays; switching changes params only, never wires, so it's gapless.
+- **Amps:** channels clean/drive/lead (drive keeps the v1 knobs), bright/deep/fat, tube type, bias (crossover gap when cold), sag, supply voltage, level-matched per channel.
+- **Cabs:** `cab/spk` (modelled or IR A/B blend, low/high cut) + `cab/mix` (MicMix: up to 4 mics, pan, solo resolved in compile) feeding the cab's `outL/outR`. Mics have level, phase, align, angle; position is 2D on the cone (`x` radius, `y` direction in turns).
+- **Plugin:** AU + VST3 (`RigPlugin`), state = rig JSON + compiled rig so it plays before the editor opens; installed and re-signed by `RigPluginInstall`.
+- **Live mode** and a design pass: Geist type, graphite neutrals, one amber pilot-lamp accent.
+
+## Later
+
+- Speaker-load interaction (cab impedance pushing back on the power amp), room mics
+- Resampling NAM captures made at other rates
+- Keychain for the TONE3000 tokens (now in the settings file)
 - Voltage/mA checks for power, hum/ground-loop noise
 - Cable tone loss and buffered/true-bypass behavior
 - MIDI footswitches and expression pedals
 - Intentional feedback loops
-- Scenes (one switch changes many pedals)
 - Windows build
 - Looper WAV export, multi-track, tempo sync
-- Bundled real cab/mic IR packs
+- Bundled IR packs: only with a license that allows redistribution (none found yet; TONE3000 IRs download on request)

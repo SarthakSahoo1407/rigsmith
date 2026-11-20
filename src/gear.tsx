@@ -5,22 +5,23 @@
 // A strip of gaffer tape marks duplicates and gear that has no power.
 
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent, ReactNode, WheelEvent } from 'react';
-import { def, itemParams, makerOf, nameOf, VARIANTS, type DeviceType, type Item, type Param } from './catalog';
+import { ampKnob, def, itemParams, makerOf, nameOf, VARIANTS, type DeviceType, type Item, type Param } from './catalog';
+import { LICENSES, useLibrary } from './library';
 import { CAB_FOOT, cones, micsOn, shapeOf } from './layout';
 import { call } from './native';
-import { isPowered, placeMic, setParam, toggle, type Device, type Rig } from './rig';
+import { isPowered, placeMic, setFile, setParam, toggle, type Device, type Rig } from './rig';
 
 const maker = (d: Device) => makerOf(d.type, d.params);
 
 export type Edit = (change: (rig: Rig) => Rig, group?: string) => void;
 // Live readouts from the engine, by device id: tuner pitch, looper state, gate open/closed.
-export type Live = Record<string, { hz?: number; mode?: string; length?: number; position?: number; open?: boolean }>;
+export type Live = Record<string, { hz?: number; mode?: string; length?: number; position?: number; open?: boolean; missing?: boolean; wrongRate?: boolean }>;
 type Props = { d: Device; rig: Rig; edit: Edit; inputs: string[]; live: Live };
 
 const fmt = (p: Param, v: number) => (p.options ? p.options[v] : String(Number(v.toFixed(p.max - p.min > 20 ? 0 : 2))));
 const LABELS: Record<string, string> = { makeup: 'gain', predelay: 'pre', feedback: 'repeats', pingpong: 'ping-pong', reference: 'ref', threshold: 'thresh' };
 const label = (name: string) => LABELS[name] ?? name;
-const UNITS: Record<string, string> = { time: ' ms', predelay: ' ms', release: ' ms', attack: ' ms', decay: ' s', threshold: ' dB', makeup: ' dB', detune: ' ct', interval: ' st', trim: ' dB', reference: ' Hz' };
+const UNITS: Record<string, string> = { time: ' ms', predelay: ' ms', release: ' ms', attack: ' ms', decay: ' s', threshold: ' dB', makeup: ' dB', detune: ' ct', interval: ' st', trim: ' dB', reference: ' Hz', lowCut: ' Hz', highCut: ' Hz', angle: '°', align: ' ms', input: ' dB', output: ' dB', voltage: '%' };
 export const readout = (p: Param, v: number) => fmt(p, v) + (p.options ? '' : (UNITS[p.name] ?? ''));
 
 export const deviceName = (d: Device) => nameOf(d.type, d.params);
@@ -298,6 +299,7 @@ function Pedal(props: Props) {
           </div>
         )}
         {plates.map((p) => <ModelPlate key={p.name} d={d} edit={edit} name={p.name} />)}
+        {d.type === 'namPedal' && <CaptureSelect d={d} edit={edit} slot="model" kind="nam" label="Capture" />}
         <div className="pedal-knobs">{knobs(props, 'pedal', (p) => !p.name.endsWith('Hz'))}</div>
         {d.type === 'tuner' && <TunerScreen {...props} />}
         {looper && <LooperScreen {...props} />}
@@ -309,7 +311,7 @@ function Pedal(props: Props) {
         </>
       ) : (
         <>
-          <div className={`pedal-name${look.upper ? ' upper' : ''}`} style={{ fontFamily: look.font }}>{deviceName(d)}</div>
+          <div className={`pedal-name${look.upper ? ' upper' : ''}`} style={{ fontFamily: look.font }}>{d.type === 'namPedal' ? d.files?.model?.name ?? 'NAM' : deviceName(d)}</div>
           <div className="pedal-maker">{maker(d)}</div>
           {shape === 'screamer'
             ? <button className="rocker-switch nodrag" {...stomp}><span /></button>
@@ -354,7 +356,7 @@ const PANEL_TOP = new Set([0, 1, 2, 8]);
 const AMP_CAP = ['black', 'chicken', 'chicken', 'gold', 'gold', 'black', 'chrome', 'cream', 'black'];
 
 function Amp(props: Props) {
-  const { rig, d } = props;
+  const { rig, d, edit } = props;
   const m = d.params.model;
   const loaded = rig.cables.some((c) => c.from.device === d.id && c.from.jack === 'speaker');
   return (
@@ -367,11 +369,91 @@ function Amp(props: Props) {
           {!loaded && <span className="warn">no load: cable a cab</span>}
         </div>
         <div className="amp-panel">
-          <div className="amp-knobs">{knobs(props, 'amp')}</div>
+          <AmpChannel {...props} />
+          <div className="amp-knobs">{ampFace(props)}</div>
+          <div className="amp-switches">
+            {AMP_SWITCHES.map((name) => (
+              <button key={name} className={`mini-toggle nodrag${d.params[name] ? ' up' : ''}`} aria-pressed={!!d.params[name]}
+                onClick={() => edit((r) => setParam(r, d.id, name, d.params[name] ? 0 : 1))}><i />{name}</button>
+            ))}
+          </div>
           <div className="amp-power">
             <span className="toggle" title="Power" /><span className="toggle" title="Standby" />
             <span className="jewel" title="On" />
           </div>
+        </div>
+      </div>
+      <TapeIf rig={rig} d={d} className="on-top" />
+    </div>
+  );
+}
+
+// The face knobs follow the channel: the clean and lead channels have their own gain and EQ.
+const AMP_FACE = ['gain', 'bass', 'mid', 'treble', 'presence', 'master'];
+export const AMP_SWITCHES = ['bright', 'deep', 'fat'];
+export const ampFace = ({ d, edit }: Pick<Props, 'd' | 'edit'>, look: KnobStyle = 'amp') => AMP_FACE.map((name) => {
+  const real = ampKnob(name, d.params.channel);
+  const p = def('amp').params.find((x) => x.name === real)!;
+  return <Knob key={name} p={{ ...p, name }} look={look} value={d.params[real]} onChange={(v, g) => edit((r) => setParam(r, d.id, real, v), g)} />;
+});
+
+// The channel switch: three lamps, like a footswitchable head's front panel.
+export function AmpChannel({ d, edit }: Pick<Props, 'd' | 'edit'>) {
+  const names = def('amp').params.find((p) => p.name === 'channel')!.options!;
+  return (
+    <div className="amp-channels nodrag" role="radiogroup" aria-label="Channel">
+      {names.map((n, i) => (
+        <button key={n} role="radio" aria-checked={d.params.channel === i} className={d.params.channel === i ? 'on' : ''}
+          onClick={() => edit((r) => setParam(r, d.id, 'channel', i))}><i />{n}</button>
+      ))}
+    </div>
+  );
+}
+
+// Picks a library file for a device slot. Shows the file's creator and license, as TONE3000 asks.
+export function CaptureSelect({ d, edit, slot, kind, label }: Pick<Props, 'd' | 'edit'> & { slot: string; kind: 'nam' | 'ir'; label?: string }) {
+  const { entries } = useLibrary();
+  const files = entries.filter((e) => e.kind === kind);
+  const current = d.files?.[slot];
+  const known = !current || files.some((e) => e.id === current.id);
+  return (
+    <select className="capture-select nodrag" aria-label={label ?? `${slot} file`} value={current?.id ?? ''}
+      onChange={(e) => {
+        const entry = files.find((f) => f.id === e.target.value);
+        edit((r) => setFile(r, d.id, slot, entry && { id: entry.id, name: entry.name, kind: entry.kind, source: entry.source, author: entry.author,
+          authorUrl: entry.authorUrl, license: entry.license, toneId: entry.toneId, modelId: entry.modelId, toneUrl: entry.toneUrl, gear: entry.gear }));
+      }}>
+      <option value="">{files.length ? `Choose ${kind === 'nam' ? 'a capture' : 'an IR'}` : `No ${kind === 'nam' ? 'captures' : 'IRs'} yet`}</option>
+      {!known && <option value={current.id}>{current.name} (not on this Mac)</option>}
+      {files.map((f) => <option key={f.id} value={f.id}>{f.name}{f.author ? ` · ${f.author}` : ''}</option>)}
+    </select>
+  );
+}
+
+export const credit = (f?: { author?: string; license?: string }) =>
+  f && [f.author, f.license && (LICENSES[f.license] ?? f.license)].filter(Boolean).join(' · ');
+
+// A NAM amp or full-rig capture: a plain head with the capture on its plate and its levels.
+function NamHead(props: Props) {
+  const { d, rig, edit, live } = props;
+  const f = d.files?.model;
+  const state = live[d.id];
+  const loaded = d.type === 'namRig' || rig.cables.some((c) => c.from.device === d.id && c.from.jack === 'speaker');
+  return (
+    <div className="amp nam-head cap-chrome">
+      <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
+      <span className="amp-handle" />
+      <div className="amp-face">
+        <div className="amp-grille">
+          <span className="amp-plate"><b>{f ? f.name : 'Neural capture'}</b><i>{d.type === 'namRig' ? 'NAM full rig' : 'NAM amp'}{f && credit(f) ? ` · ${credit(f)}` : ''}</i></span>
+          {state?.missing && <span className="warn">capture file missing</span>}
+          {!state?.missing && state?.wrongRate && <span className="warn">set the interface to 48 kHz</span>}
+          {!loaded && <span className="warn">no load: cable a cab</span>}
+        </div>
+        <div className="amp-panel">
+          <CaptureSelect d={d} edit={edit} slot="model" kind="nam" label="Capture" />
+          <div className="amp-knobs">{knobs(props, 'amp')}</div>
+          <div className="amp-power"><span className="jewel" title="On" /></div>
         </div>
       </div>
       <TapeIf rig={rig} d={d} className="on-top" />
@@ -394,7 +476,7 @@ function Cab(props: Props) {
       <span className="cab-logo" style={{ bottom: CAB_FOOT + 10 }}>{maker(d)}</span>
       <div className="cab-foot" style={{ height: CAB_FOOT }}>
         <div className="cab-row">
-          <span className="cab-spk">{def('cab').params[1].options![d.params.speaker]}</span>
+          <span className="cab-spk">{d.params.source === 1 ? `IR · ${[d.files?.irA?.name, d.files?.irB?.name].filter(Boolean).join(' + ') || 'no IR loaded'}` : def('cab').params[1].options![d.params.speaker]}</span>
           <div className="size-pick nodrag" role="radiogroup" aria-label="Cab size">
             {sizes.map((s, i) => (
               <button key={s} role="radio" aria-checked={i === size} className={i === size ? 'on' : ''} onClick={() => edit((r) => setParam(r, d.id, 'size', i))}>{s}</button>
@@ -583,6 +665,7 @@ function SteelBox(props: Props) {
 export function Gear(props: Props) {
   switch (props.d.type) {
     case 'amp': return <Amp {...props} />;
+    case 'namAmp': case 'namRig': return <NamHead {...props} />;
     case 'cab': return <Cab {...props} />;
     case 'mic': return <Mic {...props} />;
     case 'input': return <DiBox {...props} />;

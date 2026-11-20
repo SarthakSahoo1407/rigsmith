@@ -7,6 +7,7 @@
 
 #pragma once
 #include "Devices.h"
+#include "Nam.h"
 
 namespace rig
 {
@@ -149,6 +150,11 @@ private:
             for (int i = 0; i < std::min (ps->size(), (int) node.p.size()); ++i)
                 node.p[(size_t) i] = (float) (double) ps->getReference (i);
         node.on = (bool) n["on"];
+        node.files.clear();
+        if (auto* f = n["files"].getDynamicObject())
+            for (const auto& slot : f->getProperties())
+                if (const auto file = libraryFile (slot.value.toString()); file != File())
+                    node.files[slot.name.toString()] = file.getFullPathName();
         node.version++;
     }
 
@@ -166,7 +172,7 @@ private:
         {
             const auto id = n["id"].toString(), type = n["type"].toString();
             auto it = byId.find (id);
-            auto node = ! fresh && it != byId.end() && it->second->type == type ? it->second : makeNode (type);
+            auto node = ! fresh && it != byId.end() && it->second->type == type ? it->second : makeAnyNode (type);
             applyParams (*node, n);
             if (node != (it != byId.end() ? it->second : nullptr) || fresh)
                 node->prepareNode (sr, maxBlock);

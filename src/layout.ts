@@ -13,7 +13,7 @@ export type Size = { w: number; h: number };
 export type Zone = { id: string; kind: 'stage' | 'board' | 'desk'; x: number; y: number; w: number; h: number };
 export type Layout = { pos: Record<string, XY>; zones: Zone[]; board: { right: number; top: number } };
 
-const STAGE_GEAR = new Set<DeviceType>(['amp', 'cab', 'mic']);
+const STAGE_GEAR = new Set<DeviceType>(['amp', 'cab', 'mic', 'namAmp', 'namRig']);
 const DESK_GEAR = new Set<DeviceType>(['input', 'output', 'power']);
 
 export const ROW_H = 352; // pedal slot height including the gap to the next row
@@ -54,19 +54,25 @@ export const micsOn = (rig: Rig, cab: string) => Object.values(rig.devices).filt
   .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 // A mic on a cab is drawn from behind, its head over a cone; this is where the head sits in the mic's box.
 export const MIC_HEAD = { x: 40, y: 27.5 }; // the drawing is 64x172, shown at 1.25x
-// Where a mic's head sits on its cab: its cone, moved from the centre toward the edge by `position`,
-// on the side its `y` says (below 0.5 = left).
+// Where a mic's head sits on its cab: its cone, then `x` (0 centre .. 1 edge) out from the centre
+// in the direction `y` gives, in turns: 0.25 left, 0.5 down, 0.75 right, 0 or 1 up.
+export const micOffset = (x: number, y: number, r: number) =>
+  ({ x: x * r * Math.sin(2 * Math.PI * (y - 0.5)), y: x * r * Math.cos(2 * Math.PI * (y - 0.5)) });
+export const micPlacementAt = (dx: number, dy: number, r: number) =>
+  ({ x: Math.min(1, Math.hypot(dx, dy) / r), y: ((Math.atan2(dx, dy) / (2 * Math.PI) + 0.5) % 1 + 1) % 1 });
 export function micSpot(rig: Rig, mic: Device) {
   const cab = rig.devices[mic.mic!.cab];
   const k = micsOn(rig, cab.id).findIndex((m) => m.id === mic.id);
   const all = cones(cab.params.size);
   const c = all[k % all.length];
-  return { x: c.x + (mic.mic!.y < 0.5 ? -1 : 1) * mic.mic!.x * c.r * 0.85, y: c.y };
+  const o = micOffset(mic.mic!.x, mic.mic!.y, c.r * 0.85);
+  return { x: c.x + o.x, y: c.y + o.y };
 }
 
 export function gearSize(d: Device): Size {
   switch (d.type) {
     case 'amp': return { w: 540, h: 228 };
+    case 'namAmp': case 'namRig': return { w: 540, h: 200 };
     case 'cab': return CAB_SIZE[d.params.size] ?? CAB_SIZE[1];
     case 'mic': return d.mic ? { w: 80, h: 215 } : { w: 120, h: 272 };
     case 'input': return { w: 148, h: 248 };
@@ -99,7 +105,7 @@ export function layoutBoard(rig: Rig): Layout {
   };
   const stacked = new Set<string>();
   const stacks: Device[][] = [];
-  for (const amp of devices.filter((d) => d.type === 'amp')) {
+  for (const amp of devices.filter((d) => d.type === 'amp' || d.type === 'namAmp' || d.type === 'namRig')) {
     const cab = cabOf(amp);
     if (cab && !stacked.has(cab.id)) { stacks.push([amp, cab]); stacked.add(cab.id); } else stacks.push([amp]);
   }

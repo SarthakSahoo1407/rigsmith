@@ -93,7 +93,8 @@ struct Node
     const int numIns, numOuts;
     String type;
     std::atomic<bool> on { true };
-    std::array<std::atomic<float>, 16> p {}; // knob values, in catalog order (src/catalog.ts)
+    std::array<std::atomic<float>, 32> p {}; // knob values, in catalog order (src/catalog.ts)
+    std::map<String, String> files;          // message thread: slot ("model", "irA"...) → a library file's full path
     std::atomic<int> version { 1 };          // bumped on every param change
 
     void prepareNode (double rate, int maxBlock)
@@ -247,6 +248,23 @@ inline AudioBuffer<float> designIr (double sr, int length, const Curve& curve, f
     for (int i = 0; i < length; ++i)
         ir.setSample (0, i, b[(size_t) i].real() * (i > length - fade ? (float) (length - i) / (float) fade : 1.0f));
     return ir;
+}
+
+// Captures and IRs live in one folder, by kind: Library/nam/*.nam, Library/ir/*.wav.
+// A library id is "<kind>/<file name>"; anything that tries to leave the folder resolves to nothing.
+inline File libraryDir()
+{
+    auto d = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Application Support/Rig/Library");
+    d.getChildFile ("nam").createDirectory();
+    d.getChildFile ("ir").createDirectory();
+    return d;
+}
+inline File libraryFile (const String& id)
+{
+    const auto kind = id.upToFirstOccurrenceOf ("/", false, false), name = id.fromFirstOccurrenceOf ("/", false, false);
+    if ((kind != "nam" && kind != "ir") || name.isEmpty()) return {};
+    const auto f = libraryDir().getChildFile (kind).getChildFile (File::createLegalFileName (name));
+    return f.isAChildOf (libraryDir()) ? f : File();
 }
 
 } // namespace rig

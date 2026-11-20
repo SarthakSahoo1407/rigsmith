@@ -72,15 +72,45 @@ export const CATALOG = {
   pitch: pedal('Pitch Shift', 100, [{ ...p('interval', -12, 12, 12), step: 1 }, p('detune', 0, 30, 6), mix(0.5)], [IN, ...STEREO_OUT, DC]),
   acoustic: pedal('Acoustic Sim', 80, [choice('body', ['dreadnought', 'jumbo', 'parlor', 'nylon']), mix(0.7), knob('top'), p('level', -12, 12, 0)]),
 
+  // Amp: the drive channel keeps v1's gain and EQ knobs; clean and lead have their own (AMP_CHANNEL_KNOBS).
+  // Order matters: native/Devices.h AmpParam reads them by position.
   amp: {
     label: 'Amp',
     jacks: [IN, jack('send', 'out'), jack('return', 'in', 'audio', 'send'), jack('speaker', 'out', 'speaker')],
-    params: [choice('model', AMP_MODELS), knob('gain'), knob('bass'), knob('mid'), knob('treble'), knob('presence'), knob('master')],
+    params: [
+      choice('model', AMP_MODELS), knob('gain'), knob('bass'), knob('mid'), knob('treble'), knob('presence'), knob('master'),
+      choice('channel', ['clean', 'drive', 'lead'], 1), choice('bright', ['off', 'on']), choice('deep', ['off', 'on']), choice('fat', ['off', 'on']),
+      choice('tube', ['stock', 'EL34', '6L6', 'KT88', 'EL84']), knob('bias'), knob('sag'), p('voltage', 80, 110, 100),
+      knob('cleanGain', 3), knob('cleanBass'), knob('cleanMid'), knob('cleanTreble'),
+      knob('leadGain', 7), knob('leadBass'), knob('leadMid'), knob('leadTreble'),
+    ],
     parts: [{ suffix: 'pre', ins: ['in'], outs: ['send'] }, { suffix: 'power', ins: ['return'], outs: ['speaker'] }],
   },
-  // A cab has no output jack: mics placed on it pick it up (engine node output 0).
-  cab: { label: 'Cab', jacks: [jack('in', 'in', 'speaker')], params: [choice('size', ['1x12', '2x12', '4x12'], 1), choice('speaker', ['warm 25W', 'aggressive 60W', 'chimey alnico', 'sparkly US'])] },
-  mic: { label: 'Mic', jacks: [OUT], params: [choice('model', ['dynamic', 'ribbon', 'condenser'])] },
+  // A cab: mics on it pick it up. Its L/R outputs are the mic mixer's stereo bus (MicMix in the engine).
+  // Source IR plays the IR files in its slots (Device.files irA / irB) instead of the modelled speaker.
+  cab: {
+    label: 'Cab',
+    jacks: [jack('in', 'in', 'speaker'), jack('outL', 'out'), jack('outR', 'out')],
+    params: [
+      choice('size', ['1x12', '2x12', '4x12'], 1), choice('speaker', ['warm 25W', 'aggressive 60W', 'chimey alnico', 'sparkly US']),
+      choice('source', ['modelled', 'IR']), p('blend', 0, 1, 0.5), p('lowCut', 20, 300, 20), p('highCut', 3000, 20000, 20000),
+    ],
+    parts: [{ suffix: 'spk', ins: ['in'], outs: [] }, { suffix: 'mix', ins: [], outs: ['outL', 'outR'] }],
+  },
+  // A mic's controls are its mixer channel; position and distance live on Device.mic.
+  mic: {
+    label: 'Mic', jacks: [OUT],
+    params: [
+      choice('model', ['dynamic', 'ribbon', 'condenser']), p('level', -24, 12, 0), p('pan', -1, 1, 0),
+      choice('phase', ['normal', 'flipped']), p('align', 0, 3, 0), p('angle', 0, 60, 0), choice('solo', ['off', 'on']),
+    ],
+  },
+
+  // Neural Amp Modeler captures (Device.files.model). An amp capture drives a cab; a full-rig capture
+  // already includes the cab and mic; a pedal capture sits on the board and needs power.
+  namAmp: { label: 'NAM Amp', jacks: [IN, jack('speaker', 'out', 'speaker')], params: [p('input', -24, 24, 0), p('output', -24, 24, 0)] },
+  namRig: { label: 'NAM Rig', jacks: [IN, OUT], params: [p('input', -24, 24, 0), p('output', -24, 24, 0)] },
+  namPedal: pedal('NAM Pedal', 100, [p('input', -24, 24, 0), p('output', -24, 24, 0)]),
 } satisfies Record<string, DeviceDef>;
 
 export type DeviceType = keyof typeof CATALOG;
@@ -90,6 +120,7 @@ export const def = (type: DeviceType): DeviceDef => CATALOG[type];
 export const AMP_MAKERS = ['Fairmont', 'Sutter', 'Wexford', 'Kingsway', 'Thornbury', 'Ironside', 'Vexor', 'Calloway', 'Moreau'];
 export const CAB_MAKERS = ['Kingsway', 'Ironside', 'Wexford', 'Fairmont'];
 const MAKERS: Partial<Record<DeviceType, string>> = {
+  namAmp: 'NAM capture', namRig: 'NAM capture', namPedal: 'NAM capture',
   mic: 'Oriel', power: 'Voltline', input: 'Arcadia Audio', output: 'Arcadia Audio', splitter: 'Patchwell', joiner: 'Patchwell',
 };
 export const makerOf = (type: DeviceType, params: Record<string, number> = {}) =>
@@ -124,3 +155,9 @@ export type Item = { type: DeviceType; variant?: number; name: string };
 export const itemsOf = (type: DeviceType): Item[] =>
   VARIANTS[type]?.names.map((name, variant) => ({ type, variant, name })) ?? [{ type, name: CATALOG[type].label }];
 export const itemParams = (i: Item): Record<string, number> => (i.variant === undefined ? {} : { [VARIANTS[i.type]!.param]: i.variant });
+
+// The amp knobs that belong to a channel: the drive channel uses the plain names.
+export const AMP_CHANNEL_KNOBS = ['gain', 'bass', 'mid', 'treble'];
+export const ampKnob = (name: string, channel: number) =>
+  !AMP_CHANNEL_KNOBS.includes(name) || channel === 1 ? name : `${channel === 0 ? 'clean' : 'lead'}${name[0].toUpperCase()}${name.slice(1)}`;
+export const isNam = (type: DeviceType) => type === 'namAmp' || type === 'namRig' || type === 'namPedal';

@@ -3,11 +3,16 @@ import { ReactFlowProvider } from '@xyflow/react';
 import {
   ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Trash2, Undo2, Volume2, VolumeX, X,
 } from 'lucide-react';
-import { Board, type Edit, type View } from './Board';
+import { Board, type Edit } from './Board';
+import { LiveMode } from './Live';
+import { SceneStrip } from './Scenes';
+import { download, failed, models, refresh as refreshLibrary, resolve, setKey, signIn, signOut, tone, useLibrary } from './library';
 import { GearDefs, type Live } from './gear';
 import { call, inApp, on, type Meter, type State } from './native';
 import { DEFAULT_PRESET, PRESETS } from './presets';
-import { commit, compile, history, parseRig, redo, toggle, undo, type History, type Rig } from './rig';
+import { commit, compile, history, parseRig, redo, selectScene, toggle, undo, type History, type Rig } from './rig';
+
+type View = 'board' | 'grid' | 'live';
 
 const AUTOSAVE = '_autosave';
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -15,7 +20,7 @@ const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A�
 const toLevel = (peak: number) => Math.max(0, Math.min(1, (20 * Math.log10(peak || 1e-6) + 60) / 60));
 
 const KEYS: [string, string][] = [
-  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
+  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['L', 'Live mode'], ['⇧1 – ⇧8', 'Scene A–H (in Live mode: 1–8, pedals Q–O)'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
   ['1 – 9', 'Stomp pedal 1–9 in signal order'], ['B', 'Bypass the selected device'], ['P', 'Plug the selected device into power'],
   ['Enter', 'Open the selected device'], ['⌫', 'Delete the selected device or cable'], ['Esc', 'Close / deselect'],
   ['\\', 'Show or hide the gear list'], ['⌘Z  ⇧⌘Z', 'Undo / redo'], ['⌘S', 'Save preset'], ['⌘O  ⌘E', 'Open / export a .rigsmith file'], ['?', 'This list'],
@@ -36,8 +41,8 @@ function Tuner({ hz, input, onClose }: { hz: number; input: string; onClose: () 
   const inTune = hz > 0 && Math.abs(cents) <= 3;
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`gb-tuner${inTune ? ' in-tune' : ''}`} role="dialog" aria-modal="true" aria-label="Tuner">
-        <header><button className="gb-close" aria-label="Close tuner" title="Close (T or Esc)" onClick={onClose} autoFocus />{input}</header>
+      <div className={`gb-tuner${inTune ? ' in-tune' : ''}`} role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Tuner">
+        <header><button className="gb-close" aria-label="Close tuner" title="Close (T or Esc)" onClick={onClose} />{input}</header>
         <div className="gb-face">
           <svg viewBox="0 0 900 560" aria-hidden>
             <path d="M 0 560 L 900 170 L 900 0 L 0 0 Z" fill="rgba(255,255,255,.035)" />
@@ -73,6 +78,61 @@ function Tuner({ hz, input, onClose }: { hz: number; input: string; onClose: () 
   );
 }
 
+// Settings: the audio device, the TONE3000 key and sign-in, and the open-source parts inside.
+function Settings({ audio, onClose }: { audio: State; onClose: () => void }) {
+  const { t3k, signIn: pending } = useLibrary();
+  const [key, setKeyText] = useState('');
+  const [error, setError] = useState('');
+  const latency = (audio.inputMs ?? 0) + (audio.outputMs ?? 0);
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="settings" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Settings">
+        <header className="inspector-head"><div className="inspector-title"><h2>Settings</h2></div>
+          <button className="icon" aria-label="Close" onClick={onClose}><X size={16} strokeWidth={1.5} /></button></header>
+        <section>
+          <h3>Audio</h3>
+          <p className="settings-value">{audio.sampleRate
+            ? `${audio.device} · ${(audio.sampleRate / 1000).toFixed(1)} kHz · ${audio.bufferSize} samples${audio.plugin ? '' : ` · ${latency.toFixed(1)} ms`}`
+            : 'No audio device'}</p>
+          {audio.plugin
+            ? <p className="hint">In a DAW, the host chooses the device, rate and buffer.</p>
+            : <button className="button quiet" onClick={() => call('openAudioSettings')}>Choose audio device</button>}
+          <p className="hint">NAM captures are made at 48 kHz; run your interface at 48 kHz to hear them as made.</p>
+        </section>
+        <section>
+          <h3>TONE3000</h3>
+          <p className="hint">Rigsmith downloads NAM captures and IRs from TONE3000 when you ask. Create a free publishable key on tone3000.com under Settings, API.</p>
+          <form className="key-form" onSubmit={async (e) => { e.preventDefault(); if (key.trim()) { await setKey(key); setKeyText(''); } }}>
+            <label className="field"><span>Key</span>
+              <input type="password" value={key} onChange={(e) => setKeyText(e.target.value)} placeholder={t3k.hasKey ? 'Saved. Paste a new one to replace it' : 'Paste your key'} autoComplete="off" />
+            </label>
+            <button type="submit" className="button" disabled={!key.trim()}>Save key</button>
+          </form>
+          {t3k.signedIn ? (
+            <p className="settings-value"><i className="lamp on" />Signed in{t3k.user ? ` as ${t3k.user}` : ''}
+              <button className="text-button" onClick={signOut}>Sign out</button></p>
+          ) : pending ? (
+            <p className="settings-value">Enter <code className="device-code">{pending.userCode}</code> on tone3000.com to finish</p>
+          ) : (
+            <button className="button quiet" disabled={!t3k.hasKey} onClick={async () => { const err = await signIn(); if (err) setError(err); }}>Sign in</button>
+          )}
+          {error && <p className="inline-error" role="alert">{error}</p>}
+          <button className="powered" onClick={() => call('openUrl', 'https://www.tone3000.com')}>Powered by TONE3000</button>
+        </section>
+        <section>
+          <h3>Inside Rigsmith</h3>
+          <ul className="credits">
+            <li>Neural Amp Modeler core by Steven Atkinson, MIT license</li>
+            <li>Eigen, MPL 2.0</li>
+            <li>JUCE 8, AGPLv3 or commercial license</li>
+            <li>React Flow, MIT · lucide icons, ISC · Geist fonts, SIL OFL 1.1</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const [h, setH] = useState<History>();
   const hRef = useRef(h);
@@ -89,6 +149,9 @@ export function App() {
   const [muted, setMuted] = useState(false);
   const [tuning, setTuning] = useState(false);
   const [help, setHelp] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const library = useLibrary();
 
   const flash = (msg: string) => {
     setToast(msg);
@@ -110,12 +173,13 @@ export function App() {
     if (!text) return;
     let rig: Rig;
     try { rig = parseRig(text); } catch (e) { flash(`Can't open that rig: ${message(e)}`); return; }
+    rig = resolve(rig, library.entries).rig;
     edit(() => rig);
     setCurrent(key ? { key, rig } : undefined);
   };
   const load = (key: string) => {
     if (key.startsWith('b:')) {
-      const rig = PRESETS[key.slice(2)].build();
+      const rig = resolve(PRESETS[key.slice(2)].build(), library.entries).rig;
       edit(() => rig);
       setCurrent({ key, rig });
     } else call<string | null>('loadRig', key.slice(2)).then((text) => open(text, key));
@@ -146,6 +210,32 @@ export function App() {
     load(order[(at + dir + order.length) % order.length]);
   };
 
+  // Captures the rig uses that aren't on this Mac, and fetching them from TONE3000.
+  const missing = h ? resolve(h.present, library.entries).missing : [];
+  useEffect(() => {
+    if (!h || !library.loaded) return;
+    const fixed = resolve(h.present, library.entries).rig;
+    if (fixed === h.present) return;
+    const wasLoaded = current?.rig === h.present;
+    edit(() => fixed, 'resolve');
+    if (wasLoaded && current) setCurrent({ ...current, rig: fixed });
+  }, [library.entries, h?.present]);
+  const fetchMissing = async () => {
+    if (!library.t3k.signedIn) { setSettings(true); flash('Sign in to TONE3000 to download the captures'); return; }
+    setFetching(true);
+    for (const m of missing.filter((x) => x.file.toneId !== undefined)) {
+      const t = await tone(m.file.toneId!);
+      const list = failed(t) ? t : await models(t.id);
+      if (failed(t) || failed(list)) { flash((failed(t) ? t : (list as { error: string })).error); continue; }
+      const model = list.data.find((x) => String(x.id) === String(m.file.modelId)) ?? list.data.find((x) => x.size === 'standard') ?? list.data[0];
+      if (!model) { flash(`${t.title} has no models to download`); continue; }
+      const r = await download(t, model);
+      if (failed(r)) flash(r.error);
+    }
+    await refreshLibrary();
+    setFetching(false);
+  };
+
   const inputs = h ? Object.values(h.present.devices).filter((d) => d.type === 'input') : [];
   const inputMuted = inputs.length > 0 && inputs.every((d) => !d.on);
   const muteInputs = () => edit((r) => inputs.filter((d) => d.on === !inputMuted).reduce((acc, d) => toggle(acc, d.id), r));
@@ -168,9 +258,19 @@ export function App() {
     if (e.altKey) return;
     if (tuning && (k === 't' || k === 'escape')) { setTuner(false); return; }
     if (help && (k === 'escape' || k === '?')) { setHelp(false); return; }
+    if (settings && k === 'escape') { setSettings(false); return; }
+    // Scenes: shift + 1-8 anywhere; plain 1-8 in Live mode, where Q-O stomp the pedals.
+    const digit = /^Digit([1-8])$/.exec(e.code)?.[1];
+    if (digit && (e.shiftKey || view === 'live')) { e.preventDefault(); edit((r) => selectScene(r, Number(digit) - 1)); return; }
+    if (view === 'live') {
+      const stomp = 'qwertyuio'.indexOf(k);
+      if (stomp >= 0) { e.preventDefault(); document.querySelectorAll<HTMLButtonElement>('.live-stomp')[stomp]?.click(); return; }
+      if (k === 'escape' || k === 'l') { setView('board'); return; }
+    }
     const act = {
+      l: () => setView('live'),
       arrowleft: () => step(-1), arrowright: () => step(1), '[': () => step(-1), ']': () => step(1),
-      v: () => setView((x) => (x === 'board' ? 'grid' : 'board')), m: () => setMute(!muted), i: muteInputs, t: () => setTuner(true), '?': () => setHelp(true),
+      v: () => setView((x) => (x === 'board' ? 'grid' : 'board')), m: () => setMute(!muted), i: muteInputs, t: () => setTuner(true), '?': () => setHelp(true), ',': () => setSettings(true),
     }[k];
     if (act) { e.preventDefault(); act(); }
   };
@@ -229,6 +329,7 @@ export function App() {
         <div className="segmented" role="group" aria-label="View">
           <button aria-pressed={view === 'board'} onClick={() => setView('board')} title="Board (V)">Board</button>
           <button aria-pressed={view === 'grid'} onClick={() => setView('grid')} title="Grid (V)">Grid</button>
+          <button aria-pressed={view === 'live'} onClick={() => setView('live')} title="Live mode (L)">Live</button>
         </div>
         <div className="tool-group">
           <button className="icon" disabled={!h.past.length} onClick={() => apply(undo(h))} title="Undo (⌘Z)" aria-label="Undo"><Undo2 {...icon} /></button>
@@ -298,19 +399,40 @@ export function App() {
             {audio.sampleRate ? `${latency.toFixed(1)} ms` : 'no audio device'} · CPU {Math.round(meter.cpu * 100)}% · RAM {Math.round(meter.ram)} MB
           </span>
           <button className="icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => setHelp(true)}><Keyboard {...icon} /></button>
-          <button className="icon" title="Audio settings" aria-label="Audio settings" onClick={() => call('openAudioSettings')}><Settings2 {...icon} /></button>
+          <button className="icon" title="Settings (,)" aria-label="Settings" onClick={() => setSettings(true)}><Settings2 {...icon} /></button>
         </div>
       </header>
-      <ReactFlowProvider>
-        <Board rig={h.present} view={view} edit={edit} flash={flash} inputs={audio.inputs ?? []} live={live}
-          levels={{ in: meter.peak, out: meter.out, cpu: meter.cpu, ram: meter.ram }} />
-      </ReactFlowProvider>
+      {view !== 'live' && (
+        <div className="subbar">
+          <SceneStrip rig={h.present} edit={edit} />
+          {missing.length > 0 && (
+            <div className="missing" role="status">
+              <span><i className="lamp warn" />{missing.length} {missing.length === 1 ? 'capture isn\u2019t' : 'captures aren\u2019t'} on this Mac</span>
+              {missing.some((m) => m.file.toneId !== undefined)
+                ? <button className="text-button" disabled={fetching} onClick={fetchMissing}>{fetching ? 'Downloading' : 'Get from TONE3000'}</button>
+                : <span className="hint">Add the file under Captures</span>}
+            </div>
+          )}
+        </div>
+      )}
+      {view === 'live' ? (
+        <LiveMode rig={h.present} edit={edit} preset={current ? current.key.slice(2) : 'Unsaved rig'}
+          category={current?.key.startsWith('b:') ? PRESETS[current.key.slice(2)]?.category : current ? 'Your preset' : undefined}
+          onStep={step} onExit={() => setView('board')} onTune={() => setTuner(true)} muted={muted} onMute={() => setMute(!muted)}
+          levels={{ in: meter.peak, out: meter.out }} live={live} />
+      ) : (
+        <ReactFlowProvider>
+          <Board rig={h.present} view={view} edit={edit} flash={flash} inputs={audio.inputs ?? []} live={live} onSettings={() => setSettings(true)}
+            levels={{ in: meter.peak, out: meter.out, cpu: meter.cpu, ram: meter.ram }} />
+        </ReactFlowProvider>
+      )}
+      {settings && <Settings audio={audio} onClose={() => { setSettings(false); refreshLibrary(); }} />}
       {tuning && <Tuner hz={live.__tuner?.hz ?? 0} input={audio.inputs?.[inputs[0]?.params.channel ?? 0] ?? 'Input 1'} onClose={() => setTuner(false)} />}
       {help && (
         <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setHelp(false)}>
-          <div className="help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+          <div className="help" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Keyboard shortcuts">
             <header className="inspector-head"><div className="inspector-title"><h2>Keyboard shortcuts</h2></div>
-              <button className="icon" aria-label="Close" onClick={() => setHelp(false)} autoFocus><X {...icon} /></button></header>
+              <button className="icon" aria-label="Close" onClick={() => setHelp(false)}><X {...icon} /></button></header>
             <dl>{KEYS.map(([k, what]) => <div key={k}><dt><kbd>{k}</kbd></dt><dd>{what}</dd></div>)}</dl>
           </div>
         </div>

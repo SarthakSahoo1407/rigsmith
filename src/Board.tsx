@@ -10,15 +10,18 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { PanelLeftClose, PanelLeftOpen, Replace, Trash2, X } from 'lucide-react';
-import { def, itemParams, itemsOf, makerOf, variantOf, type DeviceType, type Item, type Jack, type JackKind } from './catalog';
+import { ampKnob, def, isNam, itemParams, itemsOf, makerOf, variantOf, type DeviceType, type Item, type Jack, type JackKind } from './catalog';
+import { CabStudio } from './CabStudio';
+import { Captures, DND_FILE } from './Captures';
+import type { Entry } from './library';
 import {
-  colorOf, deviceName, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams, readout, tapeName, Thumb,
-  TunerScreen, type Edit, type Live,
+  AMP_SWITCHES, AmpChannel, CaptureSelect, colorOf, credit, deviceName, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams,
+  readout, tapeName, Thumb, TunerScreen, type Edit, type Live,
 } from './gear';
-import { cones, dropHints, gearSize, isPedal, layoutBoard, layoutGrid, MIC_HEAD, TILE, type Layout, type Zone } from './layout';
+import { cones, dropHints, micPlacementAt, gearSize, isPedal, layoutBoard, layoutGrid, MIC_HEAD, TILE, type Layout, type Zone } from './layout';
 import {
-  addDevice, cableAt, canConnect, connect, disconnect, insertIntoCable, isPowered, moveDevice, placeMic, powerUp, removeDevice,
-  replaceDevice, setParam, toggle, type Device, type JackRef, type Rig, type XY,
+  addDevice, applyScene, cableAt, canConnect, connect, disconnect, insertIntoCable, isLinked, isPowered, linkParam, moveDevice, placeMic, powerUp,
+  removeDevice, replaceDevice, setFile, setParam, toggle, type Device, type FileRef, type JackRef, type Rig, type XY,
 } from './rig';
 
 export type View = 'board' | 'grid';
@@ -35,6 +38,7 @@ export const GROUPS: [string, DeviceType[]][] = [
   ['Modulation', ['chorus', 'flanger', 'phaser', 'tremolo']],
   ['Time', ['delay', 'reverb', 'looper']],
   ['Amp and cab', ['amp', 'cab', 'mic']],
+  ['Neural captures', ['namAmp', 'namRig', 'namPedal']],
   ['Routing and power', ['splitter', 'joiner', 'power', 'input', 'output']],
 ];
 const PEDAL_TYPES = GROUPS.slice(0, 6).flatMap(([, types]) => types);
@@ -195,6 +199,7 @@ function tileDetail(rig: Rig, d: Device, inputs: string[]) {
     case 'splitter': return 'A and B';
     case 'joiner': return 'A + B';
     case 'power': return '9V · 8 outlets';
+    case 'namAmp': case 'namRig': case 'namPedal': return d.files?.model?.name ?? 'no capture chosen';
     default: {
       if (!d.on) return 'bypassed';
       const shown = knobParams(d.type).filter((p) => !p.options && !p.name.endsWith('Hz')).slice(0, 2);
@@ -223,17 +228,41 @@ function Tile({ id, selected }: NodeProps) {
 }
 
 // The controls of one device, large: used by the grid panel and the device window.
+// A knob that can be made per-scene: the small S under it links it (each scene keeps its own value).
+function SceneKnob({ d, name, label, look = 'big' }: { d: Device; name: string; label?: string; look?: 'big' | 'amp' }) {
+  const { rig, edit } = useContext(RigCtx);
+  const p = def(d.type).params.find((x) => x.name === name)!;
+  const linked = isLinked(rig, d.id, name);
+  return (
+    <div className="knob-cell">
+      <Knob p={{ ...p, name: label ?? name }} look={look} value={d.params[name]} onChange={(v, g) => edit((r) => setParam(r, d.id, name, v), g)} />
+      <button className={`scene-link${linked ? ' on' : ''}`} aria-pressed={linked} title={linked ? 'Per scene: each scene keeps its own value' : 'Make this knob per scene'}
+        onClick={() => edit((r) => linkParam(r, d.id, name, !linked))}>S</button>
+    </div>
+  );
+}
+
+// The controls of one device, large: used by the grid panel and the device window.
 function DeviceControls({ d }: { d: Device }) {
   const { rig, edit, inputs, live } = useContext(RigCtx);
   const dd = def(d.type);
   const powered = isPowered(rig, d.id);
   const cabs = Object.values(rig.devices).filter((x) => x.type === 'cab');
   const props = { d, rig, edit, inputs, live };
+  const amp = d.type === 'amp';
+  const generic = knobParams(d.type).filter((p) => !(d.type === 'input' && p.name === 'channel') && !(amp));
   return (
     <>
       {plateParams(d.type).map((p) => (
         <label key={p.name} className="field"><span>{p.name}</span><ModelPlate d={d} edit={edit} name={p.name} /></label>
       ))}
+      {isNam(d.type) && (
+        <label className="field"><span>capture</span><CaptureSelect d={d} edit={edit} slot="model" kind="nam" label="Capture" />
+          {d.files?.model && <span className="credit">{credit(d.files.model) || 'Your file'}</span>}
+          {live[d.id]?.missing && <span className="inline-error">The capture file isn't on this Mac</span>}
+          {live[d.id]?.wrongRate && <span className="inline-error">This capture was made at 48 kHz: set your interface to 48 kHz</span>}
+        </label>
+      )}
       {d.type === 'input' && (
         <label className="field"><span>interface input</span>
           <select value={d.params.channel} onChange={(e) => edit((r) => setParam(r, d.id, 'channel', Number(e.target.value)))}>
@@ -244,17 +273,41 @@ function DeviceControls({ d }: { d: Device }) {
       {d.type === 'mic' && (
         <label className="field"><span>on cab</span>
           <select value={d.mic?.cab ?? ''} onChange={(e) => edit((r) => placeMic(r, d.id, e.target.value
-            ? { cab: e.target.value, x: d.mic?.x ?? 0.5, y: 0.5, distance: d.mic?.distance ?? 0.2 } : undefined))}>
+            ? { cab: e.target.value, x: d.mic?.x ?? 0.5, y: 0.75, distance: d.mic?.distance ?? 0.2 } : undefined))}>
             <option value="">none</option>
             {cabs.map((c) => <option key={c.id} value={c.id}>{tapeName(rig, c)}</option>)}
           </select>
         </label>
       )}
-      {(knobParams(d.type).length > 0 || d.type === 'mic') && (
+      {amp && (
+        <>
+          <div className="control-group"><h4>Channel</h4><div className="row"><AmpChannel d={d} edit={edit} /><SceneKnobToggle d={d} name="channel" /></div></div>
+          <div className="control-group"><h4>Front panel</h4>
+            <div className="inspector-knobs">
+              {['gain', 'bass', 'mid', 'treble', 'presence', 'master'].map((n) => <SceneKnob key={n} d={d} name={ampKnob(n, d.params.channel)} label={n} />)}
+            </div>
+            <div className="row switches">
+              {AMP_SWITCHES.map((n) => (
+                <button key={n} className={`mini-toggle${d.params[n] ? ' up' : ''}`} aria-pressed={!!d.params[n]} onClick={() => edit((r) => setParam(r, d.id, n, d.params[n] ? 0 : 1))}><i />{n}</button>
+              ))}
+            </div>
+          </div>
+          <div className="control-group"><h4>Power amp</h4>
+            <label className="field"><span>power tubes</span>
+              <select value={d.params.tube} onChange={(e) => edit((r) => setParam(r, d.id, 'tube', Number(e.target.value)))}>
+                {dd.params.find((p) => p.name === 'tube')!.options!.map((o, i) => <option key={o} value={i}>{i ? o : 'stock for this model'}</option>)}
+              </select>
+            </label>
+            <div className="inspector-knobs">{['bias', 'sag', 'voltage'].map((n) => <SceneKnob key={n} d={d} name={n} />)}</div>
+            <p className="hint">Cold bias: raspy, sputtery. Hot: fatter, squashed. Lower voltage breaks up sooner and quieter.</p>
+          </div>
+        </>
+      )}
+      {(generic.length > 0 || d.type === 'mic') && (
         <div className="inspector-knobs">
-          {knobParams(d.type).filter((p) => !(d.type === 'input' && p.name === 'channel')).map((p) => (
-            <Knob key={p.name} p={p} look="big" value={d.params[p.name]} onChange={(v, g) => edit((r) => setParam(r, d.id, p.name, v), g)} />
-          ))}
+          {generic.map((p) => p.options && p.name !== 'stages'
+            ? <Knob key={p.name} p={p} look="big" value={d.params[p.name]} onChange={(v) => edit((r) => setParam(r, d.id, p.name, v))} />
+            : <SceneKnob key={p.name} d={d} name={p.name} />)}
           {d.type === 'mic' && <MicControls d={d} edit={edit} look="big" />}
         </div>
       )}
@@ -263,14 +316,23 @@ function DeviceControls({ d }: { d: Device }) {
       {switchable(d) && d.type !== 'looper' && (
         <button className="bypass" aria-pressed={d.on} onClick={() => edit((r) => toggle(r, d.id))}>
           <span className={`led${(d.type === 'input' ? !d.on : d.on && powered) ? ' lit' : ''}`} />
-          {d.type === 'input' ? (d.on ? 'Mute input' : 'Muted') : d.on ? 'On' : 'Bypassed'}<kbd>B</kbd>
+          {d.type === 'input' ? (d.on ? 'Mute input' : 'Muted') : d.on ? 'On' : 'Bypassed'}{rig.scenes && dd.footswitch ? <span className="hint"> in this scene</span> : null}<kbd>B</kbd>
         </button>
       )}
       {dd.power && !powered && (
         <div className="notice">No power. <button onClick={() => edit((r) => powerUp(r, d.id))}>Plug into power <kbd>P</kbd></button></div>
       )}
-      {d.type === 'amp' && !cableAt(rig, { device: d.id, jack: 'speaker' }) && <div className="notice">No load: cable a cab to the speaker jack</div>}
+      {(amp || d.type === 'namAmp') && !cableAt(rig, { device: d.id, jack: 'speaker' }) && <div className="notice">No load: cable a cab to the speaker jack</div>}
     </>
+  );
+}
+
+function SceneKnobToggle({ d, name }: { d: Device; name: string }) {
+  const { rig, edit } = useContext(RigCtx);
+  const linked = isLinked(rig, d.id, name);
+  return (
+    <button className={`scene-link${linked ? ' on' : ''}`} aria-pressed={linked} title={linked ? 'Per scene' : 'Make this per scene'}
+      onClick={() => edit((r) => linkParam(r, d.id, name, !linked))}>S</button>
   );
 }
 
@@ -290,7 +352,7 @@ function Head({ d, onClose }: { d: Device; onClose: () => void }) {
         <h2>{tapeName(rig, d)}</h2>
         <span>{makerOf(d.type, d.params)} · {def(d.type).label}</span>
       </div>
-      <button className="icon" aria-label="Close" title="Close (Esc)" onClick={onClose} autoFocus><X size={16} strokeWidth={1.5} /></button>
+      <button className="icon" aria-label="Close" title="Close (Esc)" onClick={onClose}><X size={16} strokeWidth={1.5} /></button>
     </header>
   );
 }
@@ -306,18 +368,20 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
   const current = options.findIndex((i) => sameItem(d, i));
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={tapeName(ctx.rig, d)}>
+      <div className="modal" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label={tapeName(ctx.rig, d)}>
         <Head d={d} onClose={onClose} />
         <div className="modal-body">
-          <div className="modal-stage">
-            <div style={{ width: size.w * k, height: size.h * k }}>
-              <div className="device board" style={{ width: size.w, height: size.h, transform: `scale(${k})`, transformOrigin: '0 0' }}>
-                <Gear d={d} rig={ctx.rig} edit={ctx.edit} inputs={ctx.inputs} live={ctx.live} />
+          {d.type === 'cab' ? <CabStudio d={d} rig={ctx.rig} edit={ctx.edit} /> : (
+            <div className="modal-stage">
+              <div style={{ width: size.w * k, height: size.h * k }}>
+                <div className="device board" style={{ width: size.w, height: size.h, transform: `scale(${k})`, transformOrigin: '0 0' }}>
+                  <Gear d={d} rig={ctx.rig} edit={ctx.edit} inputs={ctx.inputs} live={ctx.live} />
+                </div>
               </div>
             </div>
-          </div>
+          )}
           <div className="modal-side">
-            <DeviceControls d={d} />
+            {d.type !== 'cab' && <DeviceControls d={d} />}
             {options.length > 0 && (
               <label className="field"><span><Replace size={14} strokeWidth={1.5} /> replace with</span>
                 <select value={current} onChange={(e) => {
@@ -410,7 +474,8 @@ function Inspector({ d, onClose }: { d: Device; onClose: () => void }) {
 }
 
 // The gear list: every piece drawn small, grouped like a shop wall. Click to add, or drag it in.
-function Locker({ collapsed, onCollapse, onAdd }: { collapsed: boolean; onCollapse: (c: boolean) => void; onAdd: (item: Item) => void }) {
+function Locker({ collapsed, onCollapse, onAdd, onSettings }: { collapsed: boolean; onCollapse: (c: boolean) => void; onAdd: (item: Item) => void; onSettings: () => void }) {
+  const [tab, setTab] = useState<'gear' | 'captures'>('gear');
   if (collapsed) {
     return (
       <nav className="locker collapsed" aria-label="Gear">
@@ -421,10 +486,14 @@ function Locker({ collapsed, onCollapse, onAdd }: { collapsed: boolean; onCollap
   return (
     <nav className="locker" aria-label="Gear">
       <header className="locker-head">
-        <div><h2>Gear</h2><span>Click to add, or drag onto the rig or a cable</span></div>
-        <button className="icon" title="Hide gear (\)" aria-label="Hide gear" onClick={() => onCollapse(true)}><PanelLeftClose size={16} strokeWidth={1.5} /></button>
+        <div className="segmented" role="tablist">
+          <button role="tab" aria-selected={tab === 'gear'} aria-pressed={tab === 'gear'} onClick={() => setTab('gear')}>Gear</button>
+          <button role="tab" aria-selected={tab === 'captures'} aria-pressed={tab === 'captures'} onClick={() => setTab('captures')}>Captures</button>
+        </div>
+        <button className="icon" title="Hide (\)" aria-label="Hide the gear list" onClick={() => onCollapse(true)}><PanelLeftClose size={16} strokeWidth={1.5} /></button>
       </header>
-      {GROUPS.map(([group, types]) => (
+      {tab === 'captures' ? <Captures onSettings={onSettings} /> : <span className="locker-hint">Click to add, or drag onto the rig or a cable</span>}
+      {tab === 'gear' && GROUPS.map(([group, types]) => (
         <section key={group}>
           <h3>{group}</h3>
           <div className="locker-grid">
@@ -460,7 +529,9 @@ function boardHint(rig: Rig, type: DeviceType): XY {
 
 const typing = (e: KeyboardEvent) => e.target instanceof Element && e.target.closest('input, select, textarea');
 
-export function Board({ rig, view, edit, flash, inputs, live, levels }: Ctx & { flash: (msg: string) => void }) {
+export function Board({ rig: real, view, edit, flash, inputs, live, levels, onSettings }: Ctx & { flash: (msg: string) => void; onSettings: () => void }) {
+  // Everything on screen shows the active scene; edits go to the real rig, which knows the scenes.
+  const rig = useMemo(() => applyScene(real), [real]);
   const flow = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -483,12 +554,13 @@ export function Board({ rig, view, edit, flash, inputs, live, levels }: Ctx & { 
   }, [view, count, collapsed]);
 
   // Adds gear. Dropped on the board it takes that slot; dropped on a cable it goes into the cable.
-  const add = (item: Item, at?: XY, cable?: string) => {
+  const add = (item: Item, at?: XY, cable?: string, file?: FileRef) => {
     let added = '';
     edit((r) => {
       let [next, id] = addDevice(r, item.type, boardHint(r, item.type));
       added = id;
       for (const [k, v] of Object.entries(itemParams(item))) next = setParam(next, id, k, v);
+      if (file) next = setFile(next, id, 'model', file);
       if (at && view === 'board' && isPedal(next.devices[id])) {
         const hints = dropHints(next, layoutBoard(next), id, { x: at.x - gearSize(next.devices[id]).w / 2, y: at.y });
         for (const [hid, hint] of Object.entries(hints)) next = moveDevice(next, hid, 'board', hint);
@@ -510,13 +582,41 @@ export function Board({ rig, view, edit, flash, inputs, live, levels }: Ctx & { 
       if (c && jackKind(rig, c.from) !== 'power') return c.id;
     }
   };
+  // A capture dropped on the rig becomes a NAM amp, full rig or pedal (by what TONE3000 or the file
+  // says it is); an IR dropped on a cab loads into its first free slot and switches it to IRs.
+  const dropFile = (entry: Entry, at: XY, cable?: string, x?: number, y?: number) => {
+    const ref: FileRef = { id: entry.id, name: entry.name, kind: entry.kind, source: entry.source, author: entry.author, authorUrl: entry.authorUrl,
+      license: entry.license, toneId: entry.toneId, modelId: entry.modelId, toneUrl: entry.toneUrl, gear: entry.gear };
+    if (entry.kind === 'ir') {
+      const hit = x !== undefined && y !== undefined
+        ? document.elementsFromPoint(x, y).map((el) => el.closest('.react-flow__node')?.getAttribute('data-id')).find((id) => id && rig.devices[id]?.type === 'cab')
+        : undefined;
+      const cab = hit ?? Object.values(rig.devices).find((d) => d.type === 'cab')?.id;
+      if (!cab) { flash('Drop an IR onto a cab'); return; }
+      const slot = !rig.devices[cab].files?.irA || rig.devices[cab].params.source !== 1 ? 'irA' : 'irB';
+      edit((r) => setParam(setFile(r, cab, slot, ref), cab, 'source', 1));
+      flash(`${entry.name} loaded into ${tapeName(rig, rig.devices[cab])}, slot ${slot === 'irA' ? 'A' : 'B'}`);
+      return;
+    }
+    const type: DeviceType = entry.gear === 'amp' ? 'namAmp' : entry.gear === 'amp-cab' || entry.gear === 'full-rig' ? 'namRig' : 'namPedal';
+    add({ type, name: entry.name }, at, cable, ref);
+  };
+
   const onDragOver = (e: DragEvent) => {
+    if (e.dataTransfer.types.includes(DND_FILE)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDropCable(cableAtPoint(e.clientX, e.clientY)); return; }
     if (!e.dataTransfer.types.includes(DND)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     setDropCable(cableAtPoint(e.clientX, e.clientY));
   };
   const onDrop = (e: DragEvent) => {
+    const file = e.dataTransfer.getData(DND_FILE);
+    if (file) {
+      e.preventDefault();
+      setDropCable(undefined);
+      dropFile(JSON.parse(file) as Entry, flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), cableAtPoint(e.clientX, e.clientY), e.clientX, e.clientY);
+      return;
+    }
     const raw = e.dataTransfer.getData(DND);
     setDropCable(undefined);
     if (!raw) return;
@@ -571,8 +671,7 @@ export function Board({ rig, view, edit, flash, inputs, live, levels }: Ctx & { 
           const origin = layout.pos[cab.id];
           const c = cones(cab.params.size).reduce((best, k) =>
             Math.hypot(origin.x + k.x - head.x, origin.y + k.y - head.y) < Math.hypot(origin.x + best.x - head.x, origin.y + best.y - head.y) ? k : best);
-          const dx = head.x - (origin.x + c.x);
-          at = { x: Math.min(1, Math.abs(dx) / (c.r * 0.85)), y: dx < 0 ? 0.25 : 0.75 };
+          at = micPlacementAt(head.x - (origin.x + c.x), head.y - (origin.y + c.y), c.r * 0.85);
         }
         r = placeMic(r, d.id, { cab: cab.id, ...at, distance: d.mic?.distance ?? 0.2 });
         return view === 'grid' ? moveDevice(r, d.id, 'grid', node.position) : r;
@@ -591,7 +690,7 @@ export function Board({ rig, view, edit, flash, inputs, live, levels }: Ctx & { 
   return (
     <RigCtx.Provider value={{ rig, view, edit, inputs, live, levels, dropCable }}>
       <div className={`workspace${collapsed ? ' locker-closed' : ''}${view === 'grid' ? ' with-panel' : ''}`}>
-        <Locker collapsed={collapsed} onCollapse={setCollapsed} onAdd={(item) => add(item)} />
+        <Locker collapsed={collapsed} onCollapse={setCollapsed} onAdd={(item) => add(item)} onSettings={onSettings} />
         <div ref={wrapper} className={`canvas canvas-${view}${dropCable ? ' dropping' : ''}`} onDragOver={onDragOver} onDrop={onDrop}
           onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as globalThis.Node) && setDropCable(undefined)}>
           <ReactFlow

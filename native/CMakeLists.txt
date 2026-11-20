@@ -6,6 +6,23 @@ include(FetchContent)
 FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.15 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# Neural Amp Modeler core (MIT) and Eigen (MPL2, header-only), compiled once into `nam`.
+# SOURCE_SUBDIR points nowhere so their own CMake projects (tests, tools) aren't built.
+FetchContent_Declare(namcore GIT_REPOSITORY https://github.com/sdatkinson/NeuralAmpModelerCore.git
+  GIT_TAG d3189ed482ded880c128bf312941266c4fa5ceec GIT_SUBMODULES "" SOURCE_SUBDIR none)
+FetchContent_Declare(eigen URL https://gitlab.com/libeigen/eigen/-/archive/bc3b39870ecb690a623a3f49149a358b95c5781d/eigen-bc3b39870ecb690a623a3f49149a358b95c5781d.tar.gz
+  SOURCE_SUBDIR none DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(namcore eigen)
+file(GLOB NAM_SOURCES ${namcore_SOURCE_DIR}/NAM/*.cpp ${namcore_SOURCE_DIR}/NAM/*/*.cpp)
+# OBJECT, not STATIC: each model type registers itself from a static initialiser, which a static
+# library would drop at link time ("No config parser registered").
+add_library(nam OBJECT ${NAM_SOURCES})
+target_include_directories(nam SYSTEM PUBLIC ${namcore_SOURCE_DIR} ${namcore_SOURCE_DIR}/NAM ${namcore_SOURCE_DIR}/Dependencies/nlohmann ${eigen_SOURCE_DIR})
+target_compile_definitions(nam PUBLIC NAM_SAMPLE_FLOAT NAM_ENABLE_A2_FAST)
+target_compile_options(nam PRIVATE -w -O3)
+set_target_properties(nam PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set(NAM_EXAMPLES ${namcore_SOURCE_DIR}/example_models)
+
 juce_add_gui_app(Rig
   PRODUCT_NAME "Rigsmith"
   BUNDLE_ID com.multifx.rig
@@ -16,26 +33,60 @@ juce_add_gui_app(Rig
 target_sources(Rig PRIVATE Main.cpp)
 target_compile_definitions(Rig PRIVATE JUCE_WEB_BROWSER=1 JUCE_USE_CURL=0)
 target_link_libraries(Rig
-  PRIVATE juce::juce_audio_utils juce::juce_gui_extra juce::juce_dsp
+  PRIVATE nam juce::juce_audio_utils juce::juce_gui_extra juce::juce_dsp juce::juce_audio_formats
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 # Offline engine check: renders rigs without an audio device and asserts on the output.
 juce_add_console_app(RigCheck PRODUCT_NAME "RigCheck")
 target_sources(RigCheck PRIVATE check.cpp)
-target_compile_definitions(RigCheck PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
-target_link_libraries(RigCheck PRIVATE juce::juce_audio_devices juce::juce_dsp
+target_compile_definitions(RigCheck PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0 NAM_EXAMPLES="${NAM_EXAMPLES}")
+target_link_libraries(RigCheck PRIVATE nam juce::juce_audio_devices juce::juce_audio_formats juce::juce_dsp
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 # The React UI (npm run build → ../dist) ships inside the app bundle. Runs on every build,
 # not only when the C++ relinks, and clears old hashed assets first.
+# Bundles change after linking, so each is re-signed (ad hoc) or macOS and plugin hosts reject it.
 add_custom_target(RigUi ALL
   COMMAND ${CMAKE_COMMAND} -E rm -rf $<TARGET_BUNDLE_CONTENT_DIR:Rig>/Resources/ui
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/../dist $<TARGET_BUNDLE_CONTENT_DIR:Rig>/Resources/ui
+  COMMAND codesign --force --deep -s - $<TARGET_BUNDLE_DIR:Rig>
   DEPENDS Rig)
+
+# The AU and VST3 plugin: same engine and UI. Built bundles get the UI, are re-signed, then
+# installed into ~/Library/Audio/Plug-Ins (Components for AU, VST3 for VST3).
+juce_add_plugin(RigPlugin
+  PRODUCT_NAME "Rigsmith"
+  COMPANY_NAME "Rigsmith"
+  BUNDLE_ID com.multifx.rig.plugin
+  PLUGIN_MANUFACTURER_CODE Rgsm
+  PLUGIN_CODE Rgs2
+  FORMATS AU VST3
+  IS_SYNTH FALSE
+  NEEDS_MIDI_INPUT FALSE
+  EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+  ICON_BIG ${CMAKE_SOURCE_DIR}/icon.png
+  AU_MAIN_TYPE kAudioUnitType_Effect
+  VST3_CATEGORIES Fx Distortion)
+target_sources(RigPlugin PRIVATE Plugin.cpp)
+target_compile_definitions(RigPlugin PUBLIC JUCE_WEB_BROWSER=1 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+target_link_libraries(RigPlugin
+  PRIVATE nam juce::juce_audio_utils juce::juce_gui_extra juce::juce_dsp juce::juce_audio_formats
+  PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+set(PLUGINS "$ENV{HOME}/Library/Audio/Plug-Ins")
+add_custom_target(RigPluginInstall ALL
+  COMMAND ${CMAKE_COMMAND} -E rm -rf $<TARGET_BUNDLE_CONTENT_DIR:RigPlugin_VST3>/Resources/ui $<TARGET_BUNDLE_CONTENT_DIR:RigPlugin_AU>/Resources/ui
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/../dist $<TARGET_BUNDLE_CONTENT_DIR:RigPlugin_VST3>/Resources/ui
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/../dist $<TARGET_BUNDLE_CONTENT_DIR:RigPlugin_AU>/Resources/ui
+  COMMAND codesign --force --deep -s - $<TARGET_BUNDLE_DIR:RigPlugin_VST3>
+  COMMAND codesign --force --deep -s - $<TARGET_BUNDLE_DIR:RigPlugin_AU>
+  COMMAND ${CMAKE_COMMAND} -E rm -rf ${PLUGINS}/VST3/Rigsmith.vst3 ${PLUGINS}/Components/Rigsmith.component
+  COMMAND ${CMAKE_COMMAND} -E copy_directory $<TARGET_BUNDLE_DIR:RigPlugin_VST3> ${PLUGINS}/VST3/Rigsmith.vst3
+  COMMAND ${CMAKE_COMMAND} -E copy_directory $<TARGET_BUNDLE_DIR:RigPlugin_AU> ${PLUGINS}/Components/Rigsmith.component
+  DEPENDS RigPlugin_VST3 RigPlugin_AU)
 
 # Offline renderer: plays a guitar part (synthesised or a DI .wav) through a compiled rig into a WAV.
 juce_add_console_app(RigRender PRODUCT_NAME "RigRender")
 target_sources(RigRender PRIVATE render.cpp)
 target_compile_definitions(RigRender PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
-target_link_libraries(RigRender PRIVATE juce::juce_audio_devices juce::juce_audio_formats juce::juce_dsp
+target_link_libraries(RigRender PRIVATE nam juce::juce_audio_devices juce::juce_audio_formats juce::juce_dsp
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

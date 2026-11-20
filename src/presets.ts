@@ -3,7 +3,10 @@
 // same rig out left to right in signal order.
 
 import { def, type DeviceType } from './catalog';
-import { addDevice, connect, emptyRig, mainJack as jackOf, moveDevice, placeMic, setParam, type Rig, type XY } from './rig';
+import {
+  addDevice, addScene, applyScene, connect, emptyRig, linkParam, mainJack as jackOf, moveDevice, placeMic, removeScene, renameScene, selectScene,
+  setFile, setParam, toggle, type FileRef, type Rig, type XY,
+} from './rig';
 
 const mainJack = (type: DeviceType, dir: 'in' | 'out') => jackOf(type, dir)!;
 
@@ -12,7 +15,8 @@ type Size = '1x12' | '2x12' | '4x12';
 type Speaker = 'warm 25W' | 'aggressive 60W' | 'chimey alnico' | 'sparkly US';
 type Kit = {
   input: () => string;
-  pedal: (type: DeviceType, params?: Params, opts?: { off?: boolean; loop?: boolean }) => string;
+  pedal: (type: DeviceType, params?: Params, opts?: { off?: boolean; loop?: boolean; capture?: Capture }) => string;
+  capture: (type: 'namAmp' | 'namRig', capture: Capture, params?: Params) => string; // a NAM head on the stage
   amp: (params: Params) => string;
   cab: (size: Size, speaker?: Speaker) => string; // goes under the last amp added
   mic: (model: 'dynamic' | 'ribbon' | 'condenser', cab: string, position: number, distance: number) => string;
@@ -46,13 +50,19 @@ function build(steps: (kit: Kit) => void): Rig {
     pedal: (type, params = {}, opts = {}) => {
       const id = add(type, { x: -200 * pedals++ || 0, y: 0 }, opts.loop ? -1 : 0, params);
       if (opts.off) rig = { ...rig, devices: { ...rig.devices, [id]: { ...rig.devices[id], on: false } } };
+      if (opts.capture) rig = setFile(rig, id, 'model', fileOf(opts.capture));
+      return id;
+    },
+    capture: (type, capture, params = {}) => {
+      const id = add(type, { x: 1000 * stacks++, y: 0 }, 0, params);
+      rig = setFile(rig, id, 'model', fileOf(capture));
       return id;
     },
     amp: (params) => add('amp', { x: 1000 * stacks++, y: 0 }, 0, params),
     cab: (size, speaker = 'warm 25W') => add('cab', { x: 1000 * (stacks - 1), y: 0 }, 0, { size: choice('cab', 'size', size), speaker: choice('cab', 'speaker', speaker) }),
     mic: (model, cab, position, distance) => {
       const n = mics[cab] = (mics[cab] ?? -1) + 1;
-      const id = add('mic', { x: n, y: 0 }, 1, { model: choice('mic', 'model', model) });
+      const id = add('mic', { x: n, y: 0 }, 1, { model: choice('mic', 'model', model), level: n ? -3 : 0 });
       rig = placeMic(rig, id, { cab, x: position, y: n % 2 ? 0.25 : 0.75, distance }); // a second mic on the same cone goes on the other side
       return id;
     },
@@ -92,38 +102,58 @@ function build(steps: (kit: Kit) => void): Rig {
 export type Preset = { category: string; build: () => Rig };
 export const DEFAULT_PRESET = 'Clean amp';
 
-// Common shape: guitar → tuner → pedals → amp → cab → mic(s) → interface, effects optionally in
-// the amp's loop. With no amp the chain goes straight to the interface. Two mics on one cab blend
-// through a joiner to the centre, the way an engineer mixes them; panning them apart lopsides the sound.
+// Captures on TONE3000 these presets use. Rigsmith never ships the files: loading a preset offers to
+// download them through the TONE3000 API, on the user's request, with the creator's name and license.
+// Titles are the creators' own.
+type Capture = { toneId: number; name: string; gear: string; author: string; url: string; license?: string };
+const T3K = {
+  deluxe: { toneId: 104188, name: "Fender '62 Deluxe Amp - Bright Ch - 2026", gear: 'amp', author: 'outmodedelectronics', license: 't3k', url: 'https://www.tone3000.com/tones/fender-62-deluxe-amp-bright-ch-2026-104188' },
+  badlander: { toneId: 82361, name: 'Mesa Badlander 50 - Crunch - Mesa 4x12 Load - Amp Head', gear: 'amp', author: 'outmodedelectronics', license: 't3k', url: 'https://www.tone3000.com/tones/mesa-badlander-50-crunch-mesa-4x12-load-amp-head-82361' },
+  dualRec: { toneId: 26226, name: 'Mesa Dual Rectifer Multiwatt', gear: 'amp', author: 'StudioAmpCaptures', license: 't3k', url: 'https://www.tone3000.com/tones/mesa-dual-rectifer-multiwatt-26226' },
+  dualRecRig: { toneId: 26225, name: 'Mesa Dual Rectifier Multiwatt Celestion V30', gear: 'amp-cab', author: 'StudioAmpCaptures', license: 't3k', url: 'https://www.tone3000.com/tones/mesa-dual-rectifier-multiwatt-celestion-v30-26225' },
+  deluxeRig: { toneId: 104183, name: "Fender '62 Deluxe - Bright Ch - SM57/M201 - 2026", gear: 'amp-cab', author: 'outmodedelectronics', url: 'https://www.tone3000.com/tones/fender-62-deluxe-bright-ch-sm57m201-2026-104183' },
+  ts9: { toneId: 36827, name: 'Ibanez TS9 Tube Screamer', gear: 'pedal', author: 'StudioAmpCaptures', license: 't3k', url: 'https://www.tone3000.com/tones/ibanez-ts9-tube-screamer-36827' },
+  mastotron: { toneId: 94478, name: 'ZVex Mastotron Fuzz', gear: 'pedal', author: 'outmodedelectronics', url: 'https://www.tone3000.com/tones/zvex-mastotron-fuzz-94478' },
+  blade: { toneId: 36832, name: 'Fortin Blade Whitechapel Boost', gear: 'pedal', author: 'StudioAmpCaptures', url: 'https://www.tone3000.com/tones/fortin-blade-whitechapel-boost-36832' },
+} satisfies Record<string, Capture>;
+// Until it's downloaded, a capture's library id is a placeholder; library.ts resolve() finds the real
+// file by its tone.
+const fileOf = (c: Capture): FileRef => ({
+  id: `nam/t3k-${c.toneId}.nam`, name: c.name, kind: 'nam', source: 'tone3000', toneId: c.toneId, author: c.author, license: c.license, toneUrl: c.url, gear: c.gear,
+});
+
+// Common shape: guitar → tuner → pedals → amp (or a NAM amp capture) → cab → mic(s) → interface,
+// effects optionally in the amp's loop. A NAM full-rig capture goes straight to the interface, as
+// does a rig with no amp. Two mics on one cab go through the cab's mic mixer, both centred.
 type Mic = ['dynamic' | 'ribbon' | 'condenser', number, number]; // model, position, distance
 type Shape = {
-  pedals?: [DeviceType, Params?, { off?: boolean }?][];
+  pedals?: [DeviceType, Params?, { off?: boolean; capture?: Capture }?][];
   amp?: Params;
+  capture?: Capture; // a NAM amp in place of the modelled amp, or a full rig (gear amp-cab) in place of amp, cab and mics
   loop?: [DeviceType, Params?][];
   cab?: [Size, Speaker];
   mics?: Mic[];
   level?: number; // interface volume, to even out preset loudness
 };
-const rigOf = ({ pedals = [], amp, loop = [], cab = ['2x12', 'warm 25W'], mics = [['dynamic', 0.3, 0.1]], level }: Shape) => () => build((k) => {
+const rigOf = ({ pedals = [], amp, capture, loop = [], cab = ['2x12', 'warm 25W'], mics = [['dynamic', 0.3, 0.1]], level }: Shape) => () => build((k) => {
   const i = k.input();
   const t = k.pedal('tuner');
   const chain = [i, t, ...pedals.map(([type, params, opts]) => k.pedal(type, params, opts))];
   const fx = loop.map(([type, params]) => k.pedal(type, params, { loop: true }));
   const o = k.output(level);
-  if (!amp) {
+  if (capture?.gear === 'amp-cab') chain.push(k.capture('namRig', capture));
+  if (!amp && capture?.gear !== 'amp') {
     k.chain(...chain);
     k.toOutput(chain[chain.length - 1], o);
     return;
   }
-  const a = k.amp(amp), c = k.cab(...cab);
+  const a = capture ? k.capture('namAmp', capture) : k.amp(amp!), c = k.cab(...cab);
   k.chain(...chain, a, c);
-  if (fx.length) k.loop(a, ...fx);
+  if (fx.length && !capture) k.loop(a, ...fx);
   const ms = mics.map(([model, x, d]) => k.mic(model, c, x, d));
   if (!ms[1]) return k.wire(ms[0], 'out', o, 'L');
-  const blend = k.pedal('joiner', { levelA: 1, levelB: 0.7 });
-  k.wire(ms[0], 'out', blend, 'inA');
-  k.wire(ms[1], 'out', blend, 'inB');
-  k.wire(blend, 'out', o, 'L');
+  k.wire(c, 'outL', o, 'L');
+  k.wire(c, 'outR', o, 'R');
 });
 
 // Two amps on a splitter, one per side of the stereo field: left amp → interface L, right → R.
@@ -160,7 +190,7 @@ const drive = (model: number, d: number, tone: number, level: number) => ({ mode
 const boostPedal = (d: number) => ['distortion', drive(OD, d, 6, 8)] as [DeviceType, Params]; // overdrive as a tight boost before high gain
 const gate = (threshold: number, release = 60): [DeviceType, Params] => ['gate', { threshold, release }];
 
-export const PRESETS: Record<string, Preset> = {
+const BASE: Record<string, Preset> = {
   // Clean
   [DEFAULT_PRESET]: { category: 'Clean', build: rigOf({
     pedals: [['compressor', comp(-24, 3, 4)]],
@@ -348,3 +378,111 @@ export const PRESETS: Record<string, Preset> = {
     k.chain(m, lp, o);
   }) },
 };
+
+// ---- Scenes ----
+// Builds the scenes of a preset in order: each starts from the one before, `links` are the knobs
+// that differ per scene, and each step sets footswitches and knobs for its scene.
+type Step = Record<string, Record<string, number | boolean>>;
+function withScenes(rig: Rig, links: [string, string][], scenes: [string, Step][]): Rig {
+  let r = removeScene(addScene(rig), 1); // scenes on, just scene A
+  for (const [id, name] of links) r = linkParam(r, id, name, true);
+  scenes.forEach(([name, step], i) => {
+    r = i ? addScene(r, name) : renameScene(r, 0, name);
+    for (const [id, { on, ...params }] of Object.entries(step)) {
+      if (typeof on === 'boolean' && applyScene(r).devices[id].on !== on) r = toggle(r, id);
+      for (const [k, v] of Object.entries(params)) r = setParam(r, id, k, Number(v));
+    }
+  });
+  return selectScene(r, 0);
+}
+const scened = (shape: Shape, links: [string, string][], scenes: [string, Step][]) => () => withScenes(rigOf(shape)(), links, scenes);
+
+const SCENES: Record<string, Preset> = {
+  // A clean chime amp for verses, a drive for choruses, a lead channel with more delay.
+  'Worship set': { category: 'Scenes', build: scened({
+    pedals: [['compressor', comp(-26, 3, 4)], ['distortion', drive(OD, 4, 6, 7), { off: true }]],
+    amp: amp('chime', 4, 4, 5, 7, 6), loop: [['delay', echo('tape', 430, 0.35, 0.2)], ['reverb', verb('hall', 3.5, 0.3, 6, 30)]],
+    cab: ['2x12', 'chimey alnico'],
+  }, [['delay-1', 'mix'], ['reverb-1', 'mix'], ['amp-1', 'channel'], ['amp-1', 'master']], [
+    ['Verse', { 'distortion-1': { on: false }, 'delay-1': { mix: 0.18 }, 'reverb-1': { mix: 0.25 } }],
+    ['Chorus', { 'distortion-1': { on: true }, 'delay-1': { mix: 0.25 } }],
+    ['Lead', { 'amp-1': { channel: 2, master: 5.5 }, 'delay-1': { mix: 0.35 }, 'reverb-1': { mix: 0.3 } }],
+    ['Pad', { 'distortion-1': { on: false }, 'amp-1': { channel: 1, master: 5 }, 'delay-1': { mix: 0.45 }, 'reverb-1': { mix: 0.6 } }],
+  ]) },
+  // One head, three channels: rhythm, crunch and a boosted lead with delay.
+  'Rock band': { category: 'Scenes', build: scened({
+    pedals: [boostPedal(2)], amp: amp('plexi', 7, 6, 6, 6, 5, 6), loop: [['delay', echo('analog', 380, 0.3, 0.25)]],
+    cab: ['4x12', 'warm 25W'],
+  }, [['amp-1', 'channel'], ['amp-1', 'master']], [
+    ['Clean', { 'distortion-1': { on: false }, 'delay-1': { on: false }, 'amp-1': { channel: 0, master: 6 } }],
+    ['Rhythm', { 'amp-1': { channel: 1 } }],
+    ['Crunch', { 'distortion-1': { on: true } }],
+    ['Lead', { 'amp-1': { channel: 2, master: 6.5 }, 'delay-1': { on: true } }],
+  ]) },
+  'Metal set': { category: 'Scenes', build: scened({
+    pedals: [gate(-45), boostPedal(0), ['chorus', { rate: 0.6, depth: 0.4, mix: 0.4 }, { off: true }]],
+    amp: amp('modern', 6, 5, 5, 5, 5, 5), loop: [['delay', echo('digital', 420, 0.3, 0.2, 6)]],
+    cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.2, 0.05], ['dynamic', 0.5, 0.15]],
+  }, [['amp-1', 'channel'], ['gate-1', 'threshold']], [
+    ['Clean', { 'amp-1': { channel: 0 }, 'distortion-1': { on: false }, 'chorus-1': { on: true }, 'delay-1': { on: true } }],
+    ['Rhythm', { 'amp-1': { channel: 1 }, 'distortion-1': { on: true }, 'chorus-1': { on: false }, 'delay-1': { on: false } }],
+    ['Breakdown', { 'gate-1': { threshold: -38 } }],
+    ['Lead', { 'amp-1': { channel: 2 }, 'gate-1': { threshold: -48 }, 'delay-1': { on: true } }],
+  ]) },
+  'Ambient layers': { category: 'Scenes', build: scened({
+    pedals: [['volume', { position: 0.9 }], ['chorus', { rate: 0.5, depth: 0.5, mix: 0.35 }]],
+    amp: amp('usClean', 4, 5, 5, 6), loop: [['delay', echo('tape', 520, 0.45, 0.3, 5, 1)], ['reverb', verb('hall', 5, 0.4, 5, 40)]],
+    cab: ['2x12', 'sparkly US'], mics: [['condenser', 0.4, 0.25]],
+  }, [['delay-1', 'mix'], ['delay-1', 'feedback'], ['reverb-1', 'mix'], ['reverb-1', 'decay']], [
+    ['Dry', { 'chorus-1': { on: false }, 'delay-1': { mix: 0.1, feedback: 0.2 }, 'reverb-1': { mix: 0.15, decay: 1.5 } }],
+    ['Wash', { 'chorus-1': { on: true }, 'delay-1': { mix: 0.3, feedback: 0.45 }, 'reverb-1': { mix: 0.45, decay: 5 } }],
+    ['Huge', { 'delay-1': { mix: 0.45, feedback: 0.6 }, 'reverb-1': { mix: 0.7, decay: 9 } }],
+  ]) },
+};
+
+// ---- NAM captures (fetched from TONE3000 on first load) and hybrids of captures and modelled gear ----
+const NAM: Record<string, Preset> = {
+  'NAM clean combo': { category: 'NAM captures', build: rigOf({
+    pedals: [['compressor', comp(-26, 3, 4)]], capture: T3K.deluxe, cab: ['1x12', 'sparkly US'], mics: [['dynamic', 0.3, 0.1]],
+  }) },
+  'NAM crunch head': { category: 'NAM captures', build: rigOf({
+    capture: T3K.badlander, cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.25, 0.05], ['ribbon', 0.5, 0.3]],
+  }) },
+  'NAM rectified metal': { category: 'NAM captures', build: rigOf({
+    pedals: [gate(-45), ['namPedal', {}, { capture: T3K.ts9 }]], capture: T3K.dualRec, cab: ['4x12', 'aggressive 60W'],
+    mics: [['dynamic', 0.2, 0.05], ['dynamic', 0.5, 0.15]],
+  }) },
+  'NAM rectified full rig': { category: 'NAM captures', build: rigOf({ pedals: [gate(-45), ['namPedal', {}, { capture: T3K.ts9 }]], capture: T3K.dualRecRig }) },
+  'NAM clean full rig': { category: 'NAM captures', build: rigOf({ pedals: [['compressor', comp(-26, 3, 4)], ['reverb', verb('plate', 2, 0.25, 6)]], capture: T3K.deluxeRig }) },
+  'NAM fuzz into clean combo': { category: 'NAM captures', build: rigOf({
+    pedals: [['namPedal', {}, { capture: T3K.mastotron }]], capture: T3K.deluxe, cab: ['1x12', 'sparkly US'],
+  }) },
+  // Hybrids: captured pedals into modelled amps, a captured amp into the modelled cab and mic studio.
+  'Hybrid: captured TS into UK Lead': { category: 'Hybrid', build: rigOf({
+    pedals: [gate(-48), ['namPedal', {}, { capture: T3K.ts9 }]], amp: amp('ukLead', 6, 5, 7, 6, 5, 6),
+    loop: [['delay', echo('digital', 380, 0.3, 0.2, 6)]], cab: ['4x12', 'warm 25W'],
+  }) },
+  'Hybrid: captured boost into Modern': { category: 'Hybrid', build: rigOf({
+    pedals: [gate(-45), ['namPedal', {}, { capture: T3K.blade }]], amp: amp('modern', 5, 5, 5, 5, 5, 5),
+    cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.2, 0.05], ['ribbon', 0.5, 0.3]],
+  }) },
+  'Hybrid: captured rectifier, studio cab': { category: 'Hybrid', build: rigOf({
+    pedals: [gate(-45), boostPedal(0)], capture: T3K.dualRec, cab: ['4x12', 'aggressive 60W'],
+    mics: [['dynamic', 0.15, 0.03], ['condenser', 0.45, 0.4]],
+  }) },
+  // Two amps on a splitter: the captured clean combo left, a modelled Plexi right.
+  'Hybrid: capture + Plexi stereo': { category: 'Hybrid', build: () => build((k) => {
+    const i = k.input(), t = k.pedal('tuner'), sp = k.pedal('splitter'), o = k.output();
+    k.chain(i, t, sp);
+    const left = k.capture('namAmp', T3K.deluxe), cabL = k.cab('1x12', 'sparkly US');
+    k.wire(sp, 'outA', left, 'in');
+    k.chain(left, cabL);
+    const right = k.amp(amp('plexi', 6, 6, 6, 6, 5, 6)), cabR = k.cab('4x12', 'warm 25W');
+    k.wire(sp, 'outB', right, 'in');
+    k.chain(right, cabR);
+    k.wire(k.mic('dynamic', cabL, 0.3, 0.1), 'out', o, 'L');
+    k.wire(k.mic('dynamic', cabR, 0.3, 0.1), 'out', o, 'R');
+  }) },
+};
+
+export const PRESETS: Record<string, Preset> = { ...BASE, ...SCENES, ...NAM };

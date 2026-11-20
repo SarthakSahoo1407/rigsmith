@@ -3,6 +3,7 @@
 
 #include "Engine.h"
 #include "RigFile.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <cstdio>
 
 using namespace juce;
@@ -126,6 +127,76 @@ static void checkDevices()
         const float mids = level (2500), fizz = level (8000);
         if (! (fizz < mids - 20)) std::printf ("  cab: 2.5k %.1f dB, 8k %.1f dB\n", mids, fizz);
         CHECK (fizz < mids - 20);
+    }
+    { // NAM: the core's example captures load and play; a missing file passes the signal on.
+        for (const char* file : { "wavenet.nam", "lstm.nam", "A2.nam" })
+        {
+            auto nm = rig::makeAnyNode ("namAmp");
+            nm->files["model"] = String (NAM_EXAMPLES) + "/" + file;
+            nm->prepareNode (48000.0, N);
+            nm->configure();
+            const auto out = renderNode (*nm, { sine (220, 0.2f, second) })[0];
+            bool finite = true;
+            for (float v : out) finite = finite && std::isfinite (v);
+            if (! (finite && rms (out, second / 2) > 1e-4f)) std::printf ("  nam %s: rms %.5f\n", file, rms (out, second / 2));
+            CHECK (finite && rms (out, second / 2) > 1e-4f);
+            if (static_cast<rig::Nam&> (*nm).missing) std::printf ("  nam %s: %s\n", file, static_cast<rig::Nam&> (*nm).lastError.toRawUTF8());
+            CHECK (! static_cast<rig::Nam&> (*nm).missing);
+        }
+        auto none = rig::makeAnyNode ("namPedal");
+        none->files["model"] = "/nonexistent.nam";
+        none->prepareNode (SR, N);
+        none->configure();
+        CHECK (static_cast<rig::Nam&> (*none).missing);
+        const auto in = sine (220, 0.2f, N * 4);
+        CHECK (near (rms (renderNode (*none, { in })[0]), rms (in), 1e-4f));
+    }
+    { // Cab IR slots: a real IR file in slot A replaces the modelled cab; low cut removes lows.
+        const auto file = File::getSpecialLocation (File::tempDirectory).getChildFile ("rigcheck-ir.wav");
+        {
+            WavAudioFormat wav;
+            AudioBuffer<float> ir (1, 2048);
+            ir.clear();
+            ir.setSample (0, 0, 1.0f); // a click: the IR of nothing at all
+            std::unique_ptr<OutputStream> stream = std::make_unique<FileOutputStream> (file);
+            file.deleteFile();
+            stream = std::make_unique<FileOutputStream> (file);
+            auto w = wav.createWriterFor (stream, AudioFormatWriterOptions{}.withSampleRate (SR).withNumChannels (1).withBitsPerSample (24));
+            w->writeFromAudioSampleBuffer (ir, 0, 2048);
+        }
+        auto cab = make ("cab/spk", { 2, 1, 1, 0, 20, 20000 });
+        cab->files["irA"] = file.getFullPathName();
+        cab->configure();
+        Thread::sleep (100);
+        const auto hi = sine (8000, 0.1f, second / 2);
+        const float got = rms (renderNode (*cab, { hi })[0], second / 4);
+        if (! (got > rms (hi) * 0.2f)) std::printf ("  ir slot: %.4f vs %.4f, file %d bytes\n", got, rms (hi), (int) file.getSize());
+        CHECK (got > rms (hi) * 0.2f); // a click passes 8 kHz, the 4x12 model wouldn't
+        auto cut = make ("cab/spk", { 2, 1, 1, 0, 300, 20000 });
+        cut->files["irA"] = file.getFullPathName();
+        cut->configure();
+        Thread::sleep (100);
+        const auto lo = sine (60, 0.1f, second / 2);
+        CHECK (rms (renderNode (*cut, { lo })[0], second / 4) < rms (lo) * 0.35f * 0.2f);
+    }
+    { // Amp: the lead channel is more driven than clean; tube types change the power amp.
+        auto drive = [&] (int channel, int tube) {
+            std::vector<float> ps (23, 5.0f);
+            ps[0] = 3; ps[7] = (float) channel; ps[8] = ps[9] = ps[10] = 0; ps[11] = (float) tube; ps[14] = 100;
+            auto pre = make ("amp/pre", ps), power = make ("amp/power", ps);
+            const auto out = renderNode (*power, { renderNode (*pre, { sine (110, 0.1f, second / 2) })[0] })[0];
+            float peak = 0;
+            for (size_t i = (size_t) second / 4; i < out.size(); ++i) peak = std::max (peak, std::abs (out[i]));
+            return rms (out, second / 4) / peak; // crest-factor inverse: higher = more squashed
+        };
+        CHECK (drive (2, 0) > drive (0, 0));
+        CHECK (std::abs (drive (1, 4) - drive (1, 3)) > 1e-3f);
+    }
+    { // Mic mixer: hard left pan puts a mic on the left only; centre keeps full level on both.
+        auto mix = make ("cab/mix", { 1, -1, 1, 0, 0, 0, 0, 0 });
+        const auto a = sine (440, 0.1f, N * 8), b = sine (440, 0.0f, N * 8);
+        auto out = renderNode (*mix, { a, b, b, b });
+        CHECK (near (rms (out[0]), rms (a), 1e-4f) && rms (out[1]) < 1e-6f);
     }
     { // Gate: shuts out hiss below the threshold, passes playing above it.
         auto g = make ("gate", { -50, 50 });
@@ -290,7 +361,7 @@ int main()
         for (int size = 0; size < 3; ++size)
         {
             std::snprintf (buf, sizeof buf, R"({"nodes":[{"id":"i","type":"input","params":[0,0],"on":true},
-                {"id":"a/pre","type":"amp/pre","params":[%d,7,5,5,5,5,5],"on":true},{"id":"a/power","type":"amp/power","params":[%d,7,5,5,5,5,5],"on":true},
+                {"id":"a/pre","type":"amp/pre","params":[%d,7,5,5,5,5,5,1,0,0,0,0,5,5,100,3,5,5,5,7,5,5,5],"on":true},{"id":"a/power","type":"amp/power","params":[%d,7,5,5,5,5,5,1,0,0,0,0,5,5,100,3,5,5,5,7,5,5,5],"on":true},
                 {"id":"c","type":"cab","params":[%d,%d],"on":true},{"id":"m","type":"mic","params":[0,0.3,0.2],"on":true},
                 {"id":"o","type":"output","params":[1],"on":true}],
                 "wires":[{"from":"i","out":0,"to":"a/pre","in":0},{"from":"a/pre","out":0,"to":"a/power","in":0},

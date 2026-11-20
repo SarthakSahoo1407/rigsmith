@@ -10,6 +10,8 @@
     "render": "node --experimental-strip-types --no-warnings --import ./scripts/ts-resolve.mjs scripts/render-presets.mts"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@xyflow/react": "^13.0.2",
     "lucide-react": "^1.77.0",
     "react": "^19.3.1",
