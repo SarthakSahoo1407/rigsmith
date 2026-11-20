@@ -4,10 +4,15 @@
 // the mics in front of them, seen from behind. Every piece carries its maker (catalog.ts makerOf).
 // A strip of gaffer tape marks duplicates and gear that has no power.
 
-import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent, ReactNode, WheelEvent } from 'react';
+import { createContext, useContext, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
 import { ampKnob, def, itemParams, makerOf, nameOf, VARIANTS, type DeviceType, type Item, type Param } from './catalog';
 import { LICENSES, useLibrary } from './library';
-import { CAB_FOOT, cones, micsOn, shapeOf } from './layout';
+import { CAB_FOOT, cones, gearSize, MIC_HEAD, micsOn, shapeOf } from './layout';
+import {
+  ampShell, ampShot, cabShell, cabShot, darkBox, footswitch, jewel, knobBody, knobTop, micBehind, micStanding, pedalShell, pedalShot, speaker, steelShell,
+  type Finish,
+} from './models';
+import { spriteStyle, useSprite, type Model } from './render3d';
 import { call } from './native';
 import { isPowered, placeMic, setFile, setParam, toggle, type Device, type Rig } from './rig';
 
@@ -81,19 +86,55 @@ export function Knob({ p, value, onChange, look = 'small' }: { p: Param; value: 
             ? <text key={i} x={Math.sin(a) * 21.5} y={-Math.cos(a) * 21.5 + 1.3} className="knob-num">{i}</text>
             : <line key={i} y1="-19.5" y2={i % 5 === 0 ? -16.5 : -17.8} className="knob-tick" transform={`rotate(${-150 + i * 30})`} />;
         })}
-        <circle r="14" className="knob-skirt" />
-        <circle r="14" className="knob-knurl" />
-        <circle r="10.5" className="knob-cap" />
-        <circle r="7" className="knob-top" />
-        <g transform={`rotate(${angle})`}>
-          <path d="M -4.6 7 L -2.2 -15 Q 0 -16.6 2.2 -15 L 4.6 7 Q 0 9.2 -4.6 7 Z" className="knob-head" />
-          <line y1="-4" y2="-12.5" className="knob-mark" />
-        </g>
+        <KnobArt angle={angle} view={look === 'amp' ? 'stand' : 'floor'} />
       </svg>
       <span>{label(p.name)}</span>
       {look === 'big' && <output>{readout(p, value)}</output>}
     </div>
   );
+}
+
+// The knob itself: a rendered body and a rendered top that turns (models.ts), or the flat drawing
+// until the renders are ready. The finish comes from the gear around it.
+const FinishCtx = createContext<Finish>('black');
+function KnobArt({ angle, view }: { angle: number; view: 'floor' | 'stand' }) {
+  const finish = useContext(FinishCtx);
+  const body = useSprite(`kb:${finish}:${view}`, () => knobBody(finish, view));
+  const top = useSprite(`kt:${finish}:${view}`, () => knobTop(finish, view));
+  if (body && top) {
+    return (
+      <>
+        <image href={body.url} x={body.x} y={body.y} width={body.w} height={body.h} />
+        <image href={top.url} x={top.x} y={top.y} width={top.w} height={top.h} transform={`rotate(${angle} ${top.x + top.w / 2} ${top.y + top.h / 2})`} />
+      </>
+    );
+  }
+  return (
+    <>
+      <circle r="14" className="knob-skirt" />
+      <circle r="14" className="knob-knurl" />
+      <circle r="10.5" className="knob-cap" />
+      <circle r="7" className="knob-top" />
+      <g transform={`rotate(${angle})`}>
+        <path d="M -4.6 7 L -2.2 -15 Q 0 -16.6 2.2 -15 L 4.6 7 Q 0 9.2 -4.6 7 Z" className="knob-head" />
+        <line y1="-4" y2="-12.5" className="knob-mark" />
+      </g>
+    </>
+  );
+}
+
+// The rendered body of a piece of gear, behind its live controls. Returns the image and the class
+// that tells the CSS to stop painting the flat body.
+function useShell(key: string, make: () => Model): [ReactNode, string] {
+  const s = useSprite(key, make);
+  return s ? [<img key="shell" className="shell" src={s.url} alt="" draggable={false} style={spriteStyle(s)} />, ' shelled'] : [null, ''];
+}
+// A small rendered part centred in its box (footswitch, jewel lamp).
+function Part({ k, make, className }: { k: string; make: () => Model; className?: string }) {
+  const s = useSprite(k, make);
+  if (!s) return null;
+  return <img className={`part ${className ?? ''}`} src={s.url} alt="" draggable={false}
+    style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, width: s.w, height: s.h }} />;
 }
 
 // Gradients and textures every knob and mic shares, defined once for the whole page.
@@ -113,6 +154,7 @@ export function GearDefs() {
         <linearGradient id="mic-dark" x1="0" x2="1"><stop offset="0" stopColor="#1b1c1f" /><stop offset=".45" stopColor="#5a5c63" /><stop offset="1" stopColor="#141518" /></linearGradient>
         <linearGradient id="mic-bronze" x1="0" x2="1"><stop offset="0" stopColor="#4a361d" /><stop offset=".45" stopColor="#c89f62" /><stop offset="1" stopColor="#3c2b16" /></linearGradient>
         <linearGradient id="mic-silver" x1="0" x2="1"><stop offset="0" stopColor="#8a8d92" /><stop offset=".45" stopColor="#f4f5f7" /><stop offset="1" stopColor="#7d8085" /></linearGradient>
+        <linearGradient id="plug-metal" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#8d8f94" /><stop offset=".3" stopColor="#f4f5f7" /><stop offset=".6" stopColor="#a9abaf" /><stop offset="1" stopColor="#5b5d61" /></linearGradient>
         <pattern id="mesh-silver" width="3" height="3" patternUnits="userSpaceOnUse"><rect width="3" height="3" fill="#c3c5c9" /><circle cx="1.5" cy="1.5" r=".9" fill="#5e6065" /></pattern>
         <pattern id="mesh-bronze" width="3" height="3" patternUnits="userSpaceOnUse"><rect width="3" height="3" fill="#2b2116" /><circle cx="1.5" cy="1.5" r=".9" fill="#8a6634" /></pattern>
       </defs>
@@ -282,8 +324,12 @@ function Pedal(props: Props) {
     'aria-pressed': looper ? undefined : d.on,
     onClick: () => (looper ? call('looper', d.id, 'main') : edit((r) => toggle(r, d.id))),
   };
+  const size = gearSize(d);
+  const [shell, shelled] = useShell(`pedal:${shape}:${color}:${size.w}x${size.h}`, () => pedalShell(shape, size.w, size.h, color));
   return (
-    <div className={`pedal shape-${shape} cap-${look.cap}${isLight(color) ? ' light' : ''}`} style={{ '--body': color } as CSSProperties}>
+    <FinishCtx.Provider value={look.cap}>
+    <div className={`pedal shape-${shape} cap-${look.cap}${isLight(color) ? ' light' : ''}${shelled}`} style={{ '--body': color } as CSSProperties}>
+      {shell}
       <div className="pedal-face">
         <div className="pedal-lights">
           <span className={`led${lit ? ' lit' : ''}${mode === 'recording' ? ' rec' : ''}`} title={lit ? 'On' : 'Off'} />
@@ -315,11 +361,12 @@ function Pedal(props: Props) {
           <div className="pedal-maker">{maker(d)}</div>
           {shape === 'screamer'
             ? <button className="rocker-switch nodrag" {...stomp}><span /></button>
-            : <button className="stomp nodrag" {...stomp}><span className="stomp-cap" /></button>}
+            : <button className="stomp nodrag" {...stomp}><span className="stomp-cap" /><Part k="footswitch" make={footswitch} /></button>}
         </>
       )}
       <TapeIf rig={rig} d={d} />
     </div>
+    </FinishCtx.Provider>
   );
 }
 
@@ -330,8 +377,11 @@ function Treadle(props: Props) {
   const p = def(d.type).params.find((x) => x.name === 'position')!;
   const set = (v: number, g?: string) => edit((r) => setParam(r, d.id, 'position', v), g);
   const powered = isPowered(rig, d.id);
+  const size = gearSize(d);
+  const [shell, shelled] = useShell(`treadle:${size.w}x${size.h}`, () => pedalShell('stomp', size.w, size.h, '#1b1b1c', true));
   return (
-    <div className="treadle">
+    <div className={`treadle${shelled}`}>
+      {shell}
       <div className="rocker nodrag nowheel" {...sliderProps(p, pos)} onPointerDown={dragger(pos, 0, 1, set, 120)}
         onKeyDown={arrows(pos, 0, 1, set)} onWheel={(e: WheelEvent) => set(pos - e.deltaY * 0.002, `wheel:${d.id}`)}
         style={{ transform: `perspective(320px) rotateX(${(pos - 0.5) * 22}deg)` }}>
@@ -359,8 +409,12 @@ function Amp(props: Props) {
   const { rig, d, edit } = props;
   const m = d.params.model;
   const loaded = rig.cables.some((c) => c.from.device === d.id && c.from.jack === 'speaker');
+  const size = gearSize(d);
+  const [shell, shelled] = useShell(`amp:${m}:${size.w}x${size.h}`, () => ampShell(size.w, size.h, m));
   return (
-    <div className={`amp m${m}${PANEL_TOP.has(m) ? ' panel-top' : ''} cap-${AMP_CAP[m]}`}>
+    <FinishCtx.Provider value={AMP_CAP[m] as Finish}>
+    <div className={`amp m${m}${PANEL_TOP.has(m) ? ' panel-top' : ''} cap-${AMP_CAP[m]}${shelled}`}>
+      {shell}
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <span className="amp-handle" />
       <div className="amp-face">
@@ -379,13 +433,19 @@ function Amp(props: Props) {
           </div>
           <div className="amp-power">
             <span className="toggle" title="Power" /><span className="toggle" title="Standby" />
-            <span className="jewel" title="On" />
+            <Jewel lit={loaded} />
           </div>
         </div>
       </div>
       <TapeIf rig={rig} d={d} className="on-top" />
     </div>
+    </FinishCtx.Provider>
   );
+}
+
+// The amber jewel pilot lamp: lit only when the gear is passing sound.
+function Jewel({ lit }: { lit: boolean }) {
+  return <span className={`jewel${lit ? ' lit' : ''}`} title={lit ? 'On' : 'Not passing sound'}><Part k={`jewel:${lit}`} make={() => jewel(lit)} /></span>;
 }
 
 // The face knobs follow the channel: the clean and lead channels have their own gain and EQ.
@@ -439,8 +499,12 @@ function NamHead(props: Props) {
   const f = d.files?.model;
   const state = live[d.id];
   const loaded = d.type === 'namRig' || rig.cables.some((c) => c.from.device === d.id && c.from.jack === 'speaker');
+  const size = gearSize(d);
+  const [shell, shelled] = useShell(`amp:6:${size.w}x${size.h}`, () => ampShell(size.w, size.h, 6));
   return (
-    <div className="amp nam-head cap-chrome">
+    <FinishCtx.Provider value="chrome">
+    <div className={`amp nam-head cap-chrome${shelled}`}>
+      {shell}
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <span className="amp-handle" />
       <div className="amp-face">
@@ -453,11 +517,12 @@ function NamHead(props: Props) {
         <div className="amp-panel">
           <CaptureSelect d={d} edit={edit} slot="model" kind="nam" label="Capture" />
           <div className="amp-knobs">{knobs(props, 'amp')}</div>
-          <div className="amp-power"><span className="jewel" title="On" /></div>
+          <div className="amp-power"><Jewel lit={loaded && !!f && !state?.missing} /></div>
         </div>
       </div>
       <TapeIf rig={rig} d={d} className="on-top" />
     </div>
+    </FinishCtx.Provider>
   );
 }
 
@@ -468,11 +533,14 @@ function Cab(props: Props) {
   const sizes = def('cab').params[0].options!;
   const mics = micsOn(rig, d.id);
   const models = def('mic').params[0].options!;
+  const box = gearSize(d);
+  const [shell, shelled] = useShell(`cab:${box.w}x${box.h}:${d.params.speaker}`, () => cabShell(box.w, box.h, d.params.speaker));
   return (
-    <div className={`cab s${d.params.speaker}`}>
+    <div className={`cab s${d.params.speaker}${shelled}`}>
+      {shell}
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <div className="cab-grille" style={{ bottom: CAB_FOOT }} />
-      {cones(size).map((c, i) => <span key={i} className="speaker" style={{ left: c.x - c.r, top: c.y - c.r, width: 2 * c.r, height: 2 * c.r }} />)}
+      {cones(size).map((c, i) => <Speaker key={i} x={c.x} y={c.y} r={c.r} kind={d.params.speaker} />)}
       <span className="cab-logo" style={{ bottom: CAB_FOOT + 10 }}>{maker(d)}</span>
       <div className="cab-foot" style={{ height: CAB_FOOT }}>
         <div className="cab-row">
@@ -499,6 +567,14 @@ function Cab(props: Props) {
   );
 }
 
+// One speaker behind the grille: rendered, or a faint circle until the render is ready.
+function Speaker({ x, y, r, kind }: { x: number; y: number; r: number; kind: number }) {
+  const s = useSprite(`spk:${Math.round(r)}:${kind}`, () => speaker(Math.round(r), kind));
+  return s
+    ? <img className="speaker-art" src={s.url} alt="" draggable={false} style={{ left: x - r + s.x, top: y - r + s.y, width: s.w, height: s.h }} />
+    : <span className="speaker" style={{ left: x - r, top: y - r, width: 2 * r, height: 2 * r }} />;
+}
+
 const MIC_KNOBS: Param[] = [
   { name: 'position', min: 0, max: 1, def: 0.5 }, // 0 = center of the speaker, 1 = edge
   { name: 'distance', min: 0, max: 1, def: 0.2 },
@@ -519,6 +595,8 @@ export function MicControls({ d, edit, look = 'small' }: Pick<Props, 'd' | 'edit
 // The three mics, drawn as the classics they're modelled on: a slim dynamic with a tapered grille,
 // a ribbon with its slotted bronze body, a large-diaphragm condenser with a mesh head.
 export function MicArt({ model }: { model: number }) {
+  const s = useSprite(`mic-up:${model}`, () => micStanding(model));
+  if (s) return <img className="mic-art" src={s.url} alt="" draggable={false} />;
   return (
     <svg viewBox="0 0 80 120" aria-hidden className="mic-art">
       <path d="M 18 116 L 40 104 L 62 116 M 40 104 L 40 116" className="stand" />
@@ -558,6 +636,17 @@ function MicOnCab({ d, edit }: Props) {
   const model = d.params.model;
   const shrink = 1 - d.mic!.distance * 0.3;
   const body = ['url(#mic-dark)', 'url(#mic-bronze)', 'url(#mic-silver)'][model];
+  const art = useSprite(`mic-back:${model}`, () => micBehind(model));
+  if (art) {
+    return (
+      <div className="mic-front nowheel" title="Drag across the cone to move it, scroll to move it closer or farther"
+        onWheel={(e: WheelEvent) => edit((r) => placeMic(r, d.id, { ...d.mic!, distance: Math.min(1, Math.max(0, d.mic!.distance + e.deltaY * 0.002)) }), `wheel:${d.id}`)}>
+        <div className="mic-rendered" style={{ left: MIC_HEAD.x, top: MIC_HEAD.y, transform: `scale(${shrink})` }}>
+          <img src={art.url} alt="" draggable={false} style={spriteStyle(art)} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="mic-front nowheel" title="Drag across the cone to move it, scroll to move it closer or farther"
       onWheel={(e: WheelEvent) => edit((r) => placeMic(r, d.id, { ...d.mic!, distance: Math.min(1, Math.max(0, d.mic!.distance + e.deltaY * 0.002)) }), `wheel:${d.id}`)}>
@@ -608,8 +697,11 @@ function Mic(props: Props) {
 function DiBox(props: Props) {
   const { d, edit, inputs, rig } = props;
   const channel = { ...def('input').params[0], options: inputs.length ? inputs : ['Input 1'] };
+  const size = gearSize(d);
+  const [shell, shelled] = useShell(`steel:${size.w}x${size.h}`, () => steelShell(size.w, size.h));
   return (
-    <div className="steelbox">
+    <div className={`steelbox${shelled}`}>
+      {shell}
       <Screws />
       <span className="steel-maker">{maker(d)} DI</span>
       <div className="jack-art" aria-hidden />
@@ -627,8 +719,11 @@ function DiBox(props: Props) {
 
 function Interface(props: Props) {
   const vol = props.d.params.volume;
+  const size = gearSize(props.d);
+  const [shell, shelled] = useShell(`dark:${size.w}x${size.h}:40`, () => darkBox(size.w, size.h, 40));
   return (
-    <div className="interface">
+    <div className={`interface${shelled}`}>
+      {shell}
       <div className="interface-top"><span className="badge">{maker(props.d)}</span><span className="dim-text">monitor</span></div>
       <div className="interface-body">
         <div className="combo-jacks" aria-hidden><span /><span /></div>
@@ -640,8 +735,11 @@ function Interface(props: Props) {
 }
 
 function Brick({ d, rig }: Props) {
+  const size = gearSize(d);
+  const [shell, shelled] = useShell(`dark:${size.w}x${size.h}:24`, () => darkBox(size.w, size.h, 24));
   return (
-    <div className="brick">
+    <div className={`brick${shelled}`}>
+      {shell}
       <span className="brick-led" />
       <span className="brick-maker">{maker(d)}</span>
       <span>9V DC · 8 isolated outputs</span>
@@ -651,8 +749,11 @@ function Brick({ d, rig }: Props) {
 }
 
 function SteelBox(props: Props) {
+  const size = gearSize(props.d);
+  const [shell, shelled] = useShell(`steel:${size.w}x${size.h}`, () => steelShell(size.w, size.h));
   return (
-    <div className="steelbox small">
+    <div className={`steelbox small${shelled}`}>
+      {shell}
       <Screws />
       <span className="steel-maker">{maker(props.d)}</span>
       <span className="steel-name">{deviceName(props.d)}</span>
@@ -680,6 +781,8 @@ export function Gear(props: Props) {
 // The gear list's picture of an item: a small drawing of the real thing, not a name.
 export function Thumb({ item }: { item: Item }) {
   const params = itemParams(item);
+  const shot = useShot(item.type, params);
+  if (shot) return <img className="thumb thumb-shot" src={shot.url} alt="" draggable={false} />;
   switch (item.type) {
     case 'amp': return <span className={`thumb thumb-amp m${params.model}`} aria-hidden><i /><i /></span>;
     case 'cab': return <span className={`thumb thumb-cab s${params.speaker}`} aria-hidden><i /><i /><i /><i /></span>;
@@ -699,6 +802,30 @@ export function Thumb({ item }: { item: Item }) {
           {shape === 'compact' && <span className="thumb-label" />}
         </span>
       );
+    }
+  }
+}
+
+// A small rendered picture of the whole thing, for the gear list, grid tiles and Live mode.
+export const useShot = (type: DeviceType, params: Record<string, number>) => {
+  const key = `${type}:${['model', 'speaker', 'size'].map((k) => params[k] ?? '').join(':')}`;
+  return useSprite(`shot:${key}`, () => shotOf(type, params));
+};
+function shotOf(type: DeviceType, params: Record<string, number>): Model {
+  const size = gearSize({ id: '', type, params, on: true, pos: { board: { x: 0, y: 0 }, grid: { x: 0, y: 0 } } });
+  switch (type) {
+    case 'amp': return ampShot(params.model ?? 0);
+    case 'namAmp': case 'namRig': return ampShot(6, 540, 200);
+    case 'cab': return cabShot(params.speaker ?? 0);
+    case 'mic': return micStanding(params.model ?? 0);
+    case 'input': case 'splitter': case 'joiner': return { ...steelShell(size.w, size.h), scale: 0.7 };
+    case 'output': return { ...darkBox(size.w, size.h, 40), scale: 0.7 };
+    case 'power': return { ...darkBox(size.w, size.h, 24), scale: 0.6 };
+    case 'wah': case 'volume': return { ...pedalShell('stomp', size.w, size.h, '#1b1b1c', true), scale: 0.7 };
+    default: {
+      const shape = shapeOf(type, params);
+      const look = LOOKS[`${type}${params.model ?? ''}`] ?? LOOKS[type] ?? { cap: 'black' };
+      return pedalShot(shape, size.w, size.h, colorOf(type, params), knobParams(type).filter((p) => !p.options).length, look.cap);
     }
   }
 }

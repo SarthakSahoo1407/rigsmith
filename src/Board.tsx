@@ -16,11 +16,13 @@ import { Captures, DND_FILE } from './Captures';
 import type { Entry } from './library';
 import {
   AMP_SWITCHES, AmpChannel, CaptureSelect, colorOf, credit, deviceName, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams,
-  readout, tapeName, Thumb, TunerScreen, type Edit, type Live,
+  readout, tapeName, Thumb, TunerScreen, useShot, type Edit, type Live,
 } from './gear';
+import { pedalboard } from './models';
+import { spriteStyle, useSprite } from './render3d';
 import { cones, dropHints, micPlacementAt, gearSize, isPedal, layoutBoard, layoutGrid, MIC_HEAD, TILE, type Layout, type Zone } from './layout';
 import {
-  addDevice, applyScene, cableAt, canConnect, connect, disconnect, insertIntoCable, isLinked, isPowered, linkParam, moveDevice, placeMic, powerUp,
+  addDevice, cableAt, canConnect, connect, disconnect, insertIntoCable, isPowered, moveDevice, placeMic, powerUp,
   removeDevice, replaceDevice, setFile, setParam, toggle, type Device, type FileRef, type JackRef, type Rig, type XY,
 } from './rig';
 
@@ -91,6 +93,8 @@ function toNodes(rig: Rig, view: View, prev: Node[], layout: Layout | null): Nod
     ...old.get(d.id), id: d.id, type: 'device', data: {},
     position: layout ? layout.pos[d.id] : d.pos[view],
     draggable: !(layout && FIXED.has(d.type)),
+    // A head sits on its cab and a mic stands in front of it: draw them in that order.
+    zIndex: d.type === 'mic' ? 2 : d.type === 'amp' || d.type === 'namAmp' || d.type === 'namRig' ? 1 : 0,
   }));
   return [...zones, ...devices];
 }
@@ -133,12 +137,26 @@ function CableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, tar
       strokeDasharray: kind === 'mic' ? '4 4' : undefined,
     }} />;
   }
+  // Each end is a plug pushed into its jack, pointing along the cable.
+  const ends = view === 'board' && kind !== 'mic' ? [
+    [sourceX, sourceY, Math.atan2(Math.max(sourceY, targetY) + 40 - sourceY, (targetX - sourceX) / 5)],
+    [targetX, targetY, Math.atan2(Math.max(sourceY, targetY) + 40 - targetY, -(targetX - sourceX) / 5)],
+  ] : [];
   return (
     <>
       <BaseEdge id={id} path={path} interactionWidth={22}
-        style={{ stroke: look.jacket, strokeWidth: look.width, strokeLinecap: 'round' }} />
+        style={{ stroke: look.jacket, strokeWidth: look.width, strokeLinecap: 'round', filter: 'drop-shadow(0 6px 4px rgba(0,0,0,.55))' }} />
+      <path d={path} fill="none" pointerEvents="none" strokeLinecap="round" className="cable-sheen"
+        style={{ strokeWidth: Math.max(1.5, look.width / 4), transform: `translate(0, ${-look.width / 4}px)` }} />
       <path d={path} fill="none" pointerEvents="none" strokeLinecap="round" className={hot ? 'cable-core selected' : 'cable-core'}
-        style={{ stroke: hot ? 'var(--accent)' : look.core, strokeWidth: hot ? 3 : 1.5, strokeDasharray: kind === 'mic' ? '3 5' : undefined }} />
+        style={{ stroke: hot ? 'var(--accent)' : look.core, strokeWidth: hot ? 3 : 1, strokeDasharray: kind === 'mic' ? '3 5' : undefined, opacity: hot ? 1 : 0.5 }} />
+      {ends.map(([x, y, a], i) => (
+        <g key={i} transform={`translate(${x} ${y}) rotate(${(a * 180) / Math.PI})`} pointerEvents="none" className="plug">
+          <rect x={4} y={-look.width / 2 - 2} width={18} height={look.width + 4} rx={2} fill="url(#plug-metal)" />
+          <rect x={20} y={-look.width / 2 - 1} width={14} height={look.width + 2} rx={3} fill="#121213" />
+          <rect x={2} y={-look.width / 2 - 3} width={4} height={look.width + 6} rx={1} fill="#d9dadd" />
+        </g>
+      ))}
     </>
   );
 }
@@ -146,7 +164,13 @@ function CableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, tar
 function ZoneNode({ data }: NodeProps) {
   const z = data as Zone;
   const name = { stage: 'Stage', board: 'Rigsmith Touring 32', desk: 'Desk' }[z.kind];
-  return <div className={`zone zone-${z.kind}`} style={{ width: z.w, height: z.h }}><span className="zone-name">{name}</span></div>;
+  const board = useSprite(z.kind === 'board' ? `board:${z.w}x${z.h}` : null, () => pedalboard(z.w, z.h));
+  return (
+    <div className={`zone zone-${z.kind}${board ? ' shelled' : ''}`} style={{ width: z.w, height: z.h }}>
+      {board && <img className="shell" src={board.url} alt="" draggable={false} style={spriteStyle(board)} />}
+      <span className="zone-name">{name}</span>
+    </div>
+  );
 }
 
 // Jack handles for a device, placed along each side.
@@ -208,6 +232,11 @@ function tileDetail(rig: Rig, d: Device, inputs: string[]) {
   }
 }
 
+function TileShot({ d }: { d: Device }) {
+  const shot = useShot(d.type, d.params);
+  return <div className="tile-shot">{shot && <img src={shot.url} alt="" draggable={false} />}</div>;
+}
+
 // Grid tile: colour bar, name, setting, and a light that's lit when the device is on and powered.
 function Tile({ id, selected }: NodeProps) {
   const { rig, inputs } = useContext(RigCtx);
@@ -218,7 +247,9 @@ function Tile({ id, selected }: NodeProps) {
   return (
     <div className={`tile${lit ? '' : ' dim'}${selected ? ' selected' : ''}`} style={{ width: TILE.w, height: TILE.h, '--swatch': colorOf(d.type, d.params) } as CSSProperties}>
       <Jacks d={d} view="grid" />
-      <div className="tile-top"><span className="tile-name">{tapeName(rig, d)}</span><span className={`tile-led${lit ? ' lit' : ''}`} /></div>
+      <span className={`tile-led${lit ? ' lit' : ''}`} />
+      <TileShot d={d} />
+      <span className="tile-name">{tapeName(rig, d)}</span>
       <span className="tile-model">{tileDetail(rig, d, inputs)}</span>
       {!powered && <span className="tile-badge">no power</span>}
       {d.type === 'amp' && !cableAt(rig, { device: id, jack: 'speaker' }) && <span className="tile-badge">no cab</span>}
@@ -227,19 +258,11 @@ function Tile({ id, selected }: NodeProps) {
   );
 }
 
-// The controls of one device, large: used by the grid panel and the device window.
-// A knob that can be made per-scene: the small S under it links it (each scene keeps its own value).
-function SceneKnob({ d, name, label, look = 'big' }: { d: Device; name: string; label?: string; look?: 'big' | 'amp' }) {
-  const { rig, edit } = useContext(RigCtx);
+// A knob of the device, set by name, with an optional label.
+function ParamKnob({ d, name, label }: { d: Device; name: string; label?: string }) {
+  const { edit } = useContext(RigCtx);
   const p = def(d.type).params.find((x) => x.name === name)!;
-  const linked = isLinked(rig, d.id, name);
-  return (
-    <div className="knob-cell">
-      <Knob p={{ ...p, name: label ?? name }} look={look} value={d.params[name]} onChange={(v, g) => edit((r) => setParam(r, d.id, name, v), g)} />
-      <button className={`scene-link${linked ? ' on' : ''}`} aria-pressed={linked} title={linked ? 'Per scene: each scene keeps its own value' : 'Make this knob per scene'}
-        onClick={() => edit((r) => linkParam(r, d.id, name, !linked))}>S</button>
-    </div>
-  );
+  return <Knob p={{ ...p, name: label ?? name }} look="big" value={d.params[name]} onChange={(v, g) => edit((r) => setParam(r, d.id, name, v), g)} />;
 }
 
 // The controls of one device, large: used by the grid panel and the device window.
@@ -281,10 +304,10 @@ function DeviceControls({ d }: { d: Device }) {
       )}
       {amp && (
         <>
-          <div className="control-group"><h4>Channel</h4><div className="row"><AmpChannel d={d} edit={edit} /><SceneKnobToggle d={d} name="channel" /></div></div>
+          <div className="control-group"><h4>Channel</h4><div className="row"><AmpChannel d={d} edit={edit} /></div></div>
           <div className="control-group"><h4>Front panel</h4>
             <div className="inspector-knobs">
-              {['gain', 'bass', 'mid', 'treble', 'presence', 'master'].map((n) => <SceneKnob key={n} d={d} name={ampKnob(n, d.params.channel)} label={n} />)}
+              {['gain', 'bass', 'mid', 'treble', 'presence', 'master'].map((n) => <ParamKnob key={n} d={d} name={ampKnob(n, d.params.channel)} label={n} />)}
             </div>
             <div className="row switches">
               {AMP_SWITCHES.map((n) => (
@@ -298,7 +321,7 @@ function DeviceControls({ d }: { d: Device }) {
                 {dd.params.find((p) => p.name === 'tube')!.options!.map((o, i) => <option key={o} value={i}>{i ? o : 'stock for this model'}</option>)}
               </select>
             </label>
-            <div className="inspector-knobs">{['bias', 'sag', 'voltage'].map((n) => <SceneKnob key={n} d={d} name={n} />)}</div>
+            <div className="inspector-knobs">{['bias', 'sag', 'voltage'].map((n) => <ParamKnob key={n} d={d} name={n} />)}</div>
             <p className="hint">Cold bias: raspy, sputtery. Hot: fatter, squashed. Lower voltage breaks up sooner and quieter.</p>
           </div>
         </>
@@ -307,7 +330,7 @@ function DeviceControls({ d }: { d: Device }) {
         <div className="inspector-knobs">
           {generic.map((p) => p.options && p.name !== 'stages'
             ? <Knob key={p.name} p={p} look="big" value={d.params[p.name]} onChange={(v) => edit((r) => setParam(r, d.id, p.name, v))} />
-            : <SceneKnob key={p.name} d={d} name={p.name} />)}
+            : <ParamKnob key={p.name} d={d} name={p.name} />)}
           {d.type === 'mic' && <MicControls d={d} edit={edit} look="big" />}
         </div>
       )}
@@ -316,7 +339,7 @@ function DeviceControls({ d }: { d: Device }) {
       {switchable(d) && d.type !== 'looper' && (
         <button className="bypass" aria-pressed={d.on} onClick={() => edit((r) => toggle(r, d.id))}>
           <span className={`led${(d.type === 'input' ? !d.on : d.on && powered) ? ' lit' : ''}`} />
-          {d.type === 'input' ? (d.on ? 'Mute input' : 'Muted') : d.on ? 'On' : 'Bypassed'}{rig.scenes && dd.footswitch ? <span className="hint"> in this scene</span> : null}<kbd>B</kbd>
+          {d.type === 'input' ? (d.on ? 'Mute input' : 'Muted') : d.on ? 'On' : 'Bypassed'}<kbd>B</kbd>
         </button>
       )}
       {dd.power && !powered && (
@@ -324,15 +347,6 @@ function DeviceControls({ d }: { d: Device }) {
       )}
       {(amp || d.type === 'namAmp') && !cableAt(rig, { device: d.id, jack: 'speaker' }) && <div className="notice">No load: cable a cab to the speaker jack</div>}
     </>
-  );
-}
-
-function SceneKnobToggle({ d, name }: { d: Device; name: string }) {
-  const { rig, edit } = useContext(RigCtx);
-  const linked = isLinked(rig, d.id, name);
-  return (
-    <button className={`scene-link${linked ? ' on' : ''}`} aria-pressed={linked} title={linked ? 'Per scene' : 'Make this per scene'}
-      onClick={() => edit((r) => linkParam(r, d.id, name, !linked))}>S</button>
   );
 }
 
@@ -363,7 +377,7 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
   const d = ctx.rig.devices[id];
   if (!d) return null;
   const size = gearSize(d);
-  const k = Math.min(1.9, 440 / size.w, 500 / size.h);
+  const k = Math.min(1.9, 540 / size.w, 600 / size.h); // fill the preview, leaving room for the rendered sides
   const options = replacements(d);
   const current = options.findIndex((i) => sameItem(d, i));
   return (
@@ -503,7 +517,7 @@ function Locker({ collapsed, onCollapse, onAdd, onSettings }: { collapsed: boole
                 onClick={() => onAdd(item)}>
                 <Thumb item={item} />
                 <span className="locker-name">{item.name}</span>
-                <span className="locker-maker">{makerOf(item.type, itemParams(item))}</span>
+                {(item.type === 'amp' || item.type === 'cab') && <span className="locker-maker">{makerOf(item.type, itemParams(item))}</span>}
               </button>
             ))}
           </div>
@@ -529,9 +543,7 @@ function boardHint(rig: Rig, type: DeviceType): XY {
 
 const typing = (e: KeyboardEvent) => e.target instanceof Element && e.target.closest('input, select, textarea');
 
-export function Board({ rig: real, view, edit, flash, inputs, live, levels, onSettings }: Ctx & { flash: (msg: string) => void; onSettings: () => void }) {
-  // Everything on screen shows the active scene; edits go to the real rig, which knows the scenes.
-  const rig = useMemo(() => applyScene(real), [real]);
+export function Board({ rig, view, edit, flash, inputs, live, levels, onSettings }: Ctx & { flash: (msg: string) => void; onSettings: () => void }) {
   const flow = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<Node[]>([]);

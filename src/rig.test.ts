@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DeviceType } from './catalog';
 import {
-  addDevice, addScene, canConnect, commit, compile, connect, emptyRig, history, insertIntoCable, isPowered, linkParam, parseRig,
-  placeMic, powerUp, redo, removeDevice, removeScene, replaceDevice, selectScene, setFile, setParam, toggle, undo, type Rig,
+  addDevice, canConnect, commit, compile, connect, emptyRig, history, insertIntoCable, isPowered, parseRig,
+  placeMic, powerUp, redo, removeDevice, replaceDevice, setFile, setParam, toggle, undo, type Rig,
 } from './rig';
 
 const at = { x: 0, y: 0 };
@@ -161,68 +161,54 @@ describe('cab mic mixer', () => {
   });
 });
 
-describe('scenes', () => {
-  const rigWithScenes = () => {
+describe('older rigs with scenes inside', () => {
+  it('open as their active scene', () => {
     let [rig] = build('input', 'distortion', 'delay', 'output', 'power');
     rig = connect(rig, j('input-1', 'out'), j('distortion-1', 'in'));
-    rig = connect(rig, j('distortion-1', 'out'), j('delay-1', 'in'));
-    rig = connect(rig, j('delay-1', 'outL'), j('output-1', 'L'));
-    rig = powerUp(powerUp(rig, 'distortion-1'), 'delay-1');
-    rig = toggle(rig, 'distortion-1'); // off in the base
-    return addScene(rig, 'Lead'); // scene A = current (drive off), scene B "Lead" active
-  };
-  const node = (rig: Rig, id: string) => compile(rig).nodes.find((n) => n.id === id)!;
-
-  it('each scene keeps its own footswitches', () => {
-    let rig = rigWithScenes();
-    expect(rig.scenes!.list.map((s) => s.name)).toEqual(['Scene A', 'Lead']);
-    rig = toggle(rig, 'distortion-1'); // drive on in Lead only
-    expect(node(rig, 'distortion-1').on).toBe(true);
-    rig = selectScene(rig, 0);
-    expect(node(rig, 'distortion-1').on).toBe(false);
-    expect(compile(rig).wires).toEqual(compile(selectScene(rig, 1)).wires); // switching scenes never re-cables
-  });
-
-  it('a linked knob is per scene, the rest are shared', () => {
-    let rig = linkParam(rigWithScenes(), 'delay-1', 'mix', true);
-    rig = setParam(rig, 'delay-1', 'mix', 0.6); // Lead
-    rig = setParam(rig, 'delay-1', 'time', 500); // shared
-    rig = selectScene(rig, 0);
-    expect(node(rig, 'delay-1').params[4]).toBe(0.35); // mix in scene A unchanged
-    expect(node(rig, 'delay-1').params[1]).toBe(500);
-    expect(node(selectScene(rig, 1), 'delay-1').params[4]).toBe(0.6);
-    rig = linkParam(rig, 'delay-1', 'mix', false); // shared again at scene A's value
-    expect(node(selectScene(rig, 1), 'delay-1').params[4]).toBe(0.35);
-  });
-
-  it('round-trips through a rig file and drops scenes with the last one', () => {
-    let rig = linkParam(rigWithScenes(), 'delay-1', 'mix', true);
-    rig = setParam(toggle(rig, 'distortion-1'), 'delay-1', 'mix', 0.7);
-    const back = parseRig(JSON.stringify(rig));
-    expect(back.scenes).toEqual(rig.scenes);
-    expect(compile(back)).toEqual(compile(rig));
-    const one = removeScene(rig, 0);
-    expect(one.scenes!.list.map((s) => s.name)).toEqual(['Lead']);
-    const none = removeScene(one, 0);
-    expect(none.scenes).toBeUndefined();
-    expect(compile(none)).toEqual(compile(rig)); // keeps what the last scene played
-  });
-
-  it('removing a device removes it from every scene', () => {
-    const rig = removeDevice(rigWithScenes(), 'distortion-1');
-    expect(rig.scenes!.list.every((s) => !('distortion-1' in s.on))).toBe(true);
+    rig = powerUp(rig, 'distortion-1');
+    const old = { ...rig, scenes: { active: 1, list: [
+      { name: 'A', on: {}, params: {} },
+      { name: 'Lead', on: { 'distortion-1': false }, params: { 'delay-1': { mix: 0.6 }, 'gone-1': { x: 1 } } },
+    ] } };
+    const back = parseRig(JSON.stringify(old));
+    expect(back.devices['distortion-1'].on).toBe(false);
+    expect(back.devices['delay-1'].params.mix).toBe(0.6);
+    expect('scenes' in back).toBe(false);
   });
 });
 
-describe('scene presets', async () => {
-  const { PRESETS } = await import('./presets');
-  it.each(Object.entries(PRESETS).filter(([, p]) => p.category === 'Scenes').map(([n]) => n))('%s: every scene plays something different', (name) => {
-    const rig = PRESETS[name].build();
-    expect(rig.scenes!.list.length).toBeGreaterThanOrEqual(3);
-    const sounds = rig.scenes!.list.map((_, i) => JSON.stringify(compile(selectScene(rig, i)).nodes));
-    expect(new Set(sounds).size).toBe(sounds.length);
-    const wires = rig.scenes!.list.map((_, i) => JSON.stringify(compile(selectScene(rig, i)).wires));
-    expect(new Set(wires).size).toBe(1); // scenes never re-cable, so switching is gapless
+describe('live sets', async () => {
+  const { PRESETS, SETS, tweak } = await import('./presets');
+  const sets = await import('./sets');
+  it.each(Object.keys(SETS))('%s: every scene plays something different, scenes of one rig switch without a gap', (name) => {
+    const set = SETS[name]();
+    expect(set.scenes.length).toBeGreaterThanOrEqual(4);
+    for (const s of set.scenes) expect(PRESETS[s.from.slice(2)]).toBeDefined();
+    const songs = sets.songsOf(set);
+    expect(songs.length).toBeGreaterThanOrEqual(2);
+    for (const { scenes } of songs)
+      for (let k = 1; k < scenes.length; k++) expect(sets.sameSound(scenes[k - 1].scene.rig, scenes[k].scene.rig)).toBe(false);
+    for (const s of set.scenes)
+      if (s.from.startsWith('b:')) expect(sets.sameShape(s.rig, PRESETS[s.from.slice(2)].build())).toBe(true); // a tweak never re-cables
+  });
+
+  it('edits and saves a set, dropping broken scenes on load', () => {
+    const rig = PRESETS['Worship chime'].build();
+    let set = { name: 'Mine', scenes: [] as import('./sets').SetScene[] };
+    set = sets.addToSet(set, { name: 'Verse', song: 'One', from: 'b:Worship chime', rig });
+    set = sets.addToSet(set, { name: 'Chorus', song: 'One', from: 'b:Worship chime', rig: tweak(rig, { 'distortion-1': { on: true } }) });
+    set = sets.addToSet(set, { name: 'Intro', song: 'One', from: '', rig }, 0);
+    expect(set.scenes.map((s) => s.name)).toEqual(['Intro', 'Verse', 'Chorus']);
+    set = sets.moveInSet(sets.changeScene(set, 2, { song: 'Two' }), 0, 1);
+    expect(set.scenes.map((s) => s.name)).toEqual(['Verse', 'Intro', 'Chorus']);
+    expect(sets.songsOf(set).map((s) => s.song)).toEqual(['One', 'Two']);
+    const saved = JSON.parse(JSON.stringify({ Mine: set }));
+    saved.Mine.scenes.push({ name: 'Broken', rig: 'nope' });
+    const back = sets.parseSets(JSON.stringify(saved)).Mine;
+    expect(back.scenes.map((s) => s.name)).toEqual(['Verse', 'Intro', 'Chorus']);
+    expect(sets.sameSound(back.scenes[2].rig, set.scenes[2].rig)).toBe(true);
+    expect(sets.removeFromSet(back, 1).scenes.map((s) => s.name)).toEqual(['Verse', 'Chorus']);
+    expect(() => tweak(rig, { 'nothing-1': { on: true } })).toThrow();
   });
 });
 

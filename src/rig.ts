@@ -26,12 +26,8 @@ export type FileRef = {
   id: string; name: string; kind?: 'nam' | 'ir'; source?: 'file' | 'tone3000';
   author?: string; authorUrl?: string; license?: string; toneId?: number | string; modelId?: number | string; toneUrl?: string; gear?: string;
 };
-// Scenes: up to eight snapshots inside one rig. Each remembers which blocks are on, plus the knobs
-// that were made per-scene ("linked"); everything else is shared by all scenes.
-export type Scene = { name: string; on: Record<string, boolean>; params: Record<string, Record<string, number>> };
-export type Scenes = { active: number; list: Scene[] };
-export type Rig = { version: 1; devices: Record<string, Device>; cables: Cable[]; scenes?: Scenes };
-export const MAX_SCENES = 8;
+// Scenes live in live sets (sets.ts), each holding a whole rig.
+export type Rig = { version: 1; devices: Record<string, Device>; cables: Cable[] };
 
 // Knob values go as an array in catalog order; a placed mic adds its position and distance.
 export type Compiled = {
@@ -68,12 +64,7 @@ export function removeDevice(rig: Rig, id: string): Rig {
     if (d.id === id) continue;
     devices[d.id] = d.mic?.cab === id ? { ...d, mic: undefined } : d; // its mics fall off
   }
-  const scenes = rig.scenes && { ...rig.scenes, list: rig.scenes.list.map((s) => {
-    const { [id]: _on, ...on } = s.on;
-    const { [id]: _params, ...params } = s.params;
-    return { ...s, on, params };
-  }) };
-  return { ...rig, devices, cables: rig.cables.filter((c) => c.from.device !== id && c.to.device !== id), ...(scenes && { scenes }) };
+  return { ...rig, devices, cables: rig.cables.filter((c) => c.from.device !== id && c.to.device !== id) };
 }
 
 const update = (rig: Rig, id: string, change: Partial<Device>): Rig => ({
@@ -86,13 +77,7 @@ export function moveDevice(rig: Rig, id: string, view: 'board' | 'grid', at: XY)
   return was.x === at.x && was.y === at.y ? rig : update(rig, id, { pos: { ...rig.devices[id].pos, [view]: at } });
 }
 
-// With scenes, a footswitch belongs to the active scene; without, to the device.
-export function toggle(rig: Rig, id: string): Rig {
-  const sc = rig.scenes;
-  if (!sc || !sceneSwitched(rig.devices[id])) return update(rig, id, { on: !rig.devices[id].on });
-  const scene = sc.list[sc.active];
-  return withScene(rig, { ...scene, on: { ...scene.on, [id]: !(scene.on[id] ?? rig.devices[id].on) } });
-}
+export const toggle = (rig: Rig, id: string): Rig => update(rig, id, { on: !rig.devices[id].on });
 
 const clampParam = (rig: Rig, id: string, name: string, value: number) => {
   const p = def(rig.devices[id].type).params.find((x) => x.name === name);
@@ -101,88 +86,10 @@ const clampParam = (rig: Rig, id: string, name: string, value: number) => {
   return Math.min(p.max, Math.max(p.min, step ? Math.round(value / step) * step : value));
 };
 
-// A knob linked to scenes changes only in the active scene; any other knob changes for all.
 export function setParam(rig: Rig, id: string, name: string, value: number): Rig {
   const v = clampParam(rig, id, name, value);
   if (v === undefined) return rig;
-  if (isLinked(rig, id, name)) {
-    const scene = rig.scenes!.list[rig.scenes!.active];
-    return withScene(rig, { ...scene, params: { ...scene.params, [id]: { ...scene.params[id], [name]: v } } });
-  }
   return update(rig, id, { params: { ...rig.devices[id].params, [name]: v } });
-}
-
-// ---- Scenes ----
-const sceneSwitched = (d: Device) => !!def(d.type).footswitch;
-const withScene = (rig: Rig, scene: Scene): Rig => ({
-  ...rig, scenes: { ...rig.scenes!, list: rig.scenes!.list.map((s, i) => (i === rig.scenes!.active ? scene : s)) },
-});
-export const isLinked = (rig: Rig, id: string, name: string) => !!rig.scenes?.list.some((s) => s.params[id]?.[name] !== undefined);
-
-// The rig as the active scene plays it: its footswitches and linked knobs over the shared settings.
-export function applyScene(rig: Rig): Rig {
-  const sc = rig.scenes;
-  if (!sc) return rig;
-  const scene = sc.list[sc.active];
-  const devices: Record<string, Device> = {};
-  for (const d of Object.values(rig.devices)) {
-    const on = sceneSwitched(d) ? scene.on[d.id] ?? d.on : d.on;
-    const params = scene.params[d.id] ? { ...d.params, ...scene.params[d.id] } : d.params;
-    devices[d.id] = on === d.on && params === d.params ? d : { ...d, on, params };
-  }
-  return { ...rig, devices };
-}
-
-// The current sound as a scene: every footswitch's state and every linked knob's value.
-function snapshot(rig: Rig, name: string): Scene {
-  const now = applyScene(rig);
-  const on: Record<string, boolean> = {};
-  const params: Record<string, Record<string, number>> = {};
-  for (const d of Object.values(now.devices)) if (sceneSwitched(d)) on[d.id] = d.on;
-  for (const s of rig.scenes?.list ?? [])
-    for (const [id, ps] of Object.entries(s.params))
-      for (const k of Object.keys(ps)) if (now.devices[id]) (params[id] ??= {})[k] = now.devices[id].params[k];
-  return { name, on, params };
-}
-
-// Adds a scene copied from what's playing now and switches to it. The first call turns scenes on.
-export function addScene(rig: Rig, name?: string): Rig {
-  const list = rig.scenes?.list ?? [];
-  if (list.length >= MAX_SCENES) throw new Error(`A rig has at most ${MAX_SCENES} scenes`);
-  const base = list.length ? list : [snapshot(rig, 'Scene A')];
-  const scene = snapshot(rig, name ?? `Scene ${String.fromCharCode(65 + base.length)}`);
-  return { ...rig, scenes: { active: base.length, list: [...base, scene] } };
-}
-
-export function selectScene(rig: Rig, index: number): Rig {
-  if (!rig.scenes || index < 0 || index >= rig.scenes.list.length || index === rig.scenes.active) return rig;
-  return { ...rig, scenes: { ...rig.scenes, active: index } };
-}
-
-export const renameScene = (rig: Rig, index: number, name: string): Rig =>
-  !rig.scenes ? rig : { ...rig, scenes: { ...rig.scenes, list: rig.scenes.list.map((s, i) => (i === index ? { ...s, name: name.slice(0, 24) } : s)) } };
-
-// Removing the last scene turns scenes off, keeping what that scene played.
-export function removeScene(rig: Rig, index: number): Rig {
-  const sc = rig.scenes;
-  if (!sc) return rig;
-  if (sc.list.length === 1) { const { scenes: _, ...rest } = applyScene(rig); return rest; }
-  const list = sc.list.filter((_, i) => i !== index);
-  return { ...rig, scenes: { list, active: Math.min(index <= sc.active ? Math.max(0, sc.active - 1) : sc.active, list.length - 1) } };
-}
-
-// Makes a knob per-scene (every scene starts at its current value), or shared again (all scenes
-// take the active scene's value).
-export function linkParam(rig: Rig, id: string, name: string, linked: boolean): Rig {
-  if (!rig.scenes) rig = addScene(rig);
-  const value = applyScene(rig).devices[id].params[name];
-  const list = rig.scenes!.list.map((s) => {
-    const own = { ...s.params[id] };
-    if (linked) own[name] ??= value; else delete own[name];
-    return { ...s, params: { ...s.params, [id]: own } };
-  });
-  const next = { ...rig, scenes: { ...rig.scenes!, list } };
-  return linked ? next : update(next, id, { params: { ...rig.devices[id].params, [name]: value } });
 }
 
 export const setFile = (rig: Rig, id: string, slot: string, file: FileRef | undefined): Rig => {
@@ -324,7 +231,6 @@ function endpoint(d: Device, jack: string) {
 }
 
 export function compile(rig: Rig): Compiled {
-  rig = applyScene(rig);
   // Unpowered pedals and power supplies drop out of the audio path entirely.
   const live = Object.values(rig.devices).filter(
     (d) => isPowered(rig, d.id) && def(d.type).jacks.some((j) => j.kind !== 'power'),
@@ -403,22 +309,11 @@ export function parseRig(text: string): Rig {
     const ref = (r: any): JackRef => ({ device: String(r?.device), jack: String(r?.jack) });
     rig = connect(rig, ref(c?.from), ref(c?.to));
   }
-  if (Array.isArray(raw.scenes?.list) && raw.scenes.list.length) {
-    const list: Scene[] = raw.scenes.list.slice(0, MAX_SCENES).map((s: any, i: number) => {
-      const on: Record<string, boolean> = {};
-      const params: Record<string, Record<string, number>> = {};
-      for (const [id, v] of Object.entries<any>(s?.on ?? {})) if (rig.devices[id] && typeof v === 'boolean') on[id] = v;
-      for (const [id, ps] of Object.entries<any>(s?.params ?? {})) {
-        if (!rig.devices[id] || typeof ps !== 'object' || ps === null) continue;
-        for (const [k, v] of Object.entries(ps)) {
-          const c = clampParam(rig, id, k, num(v, NaN));
-          if (c !== undefined) (params[id] ??= {})[k] = c;
-        }
-      }
-      return { name: typeof s?.name === 'string' ? s.name.slice(0, 24) : `Scene ${String.fromCharCode(65 + i)}`, on, params };
-    });
-    rig = { ...rig, scenes: { list, active: Math.min(list.length - 1, Math.max(0, Math.trunc(num(raw.scenes.active)))) } };
-  }
+  // Older rigs kept scenes inside: they open as their active scene.
+  const scene = Array.isArray(raw.scenes?.list) ? raw.scenes.list[Math.trunc(num(raw.scenes.active))] : undefined;
+  for (const [id, on] of Object.entries<any>(scene?.on ?? {})) if (rig.devices[id] && typeof on === 'boolean' && rig.devices[id].on !== on) rig = toggle(rig, id);
+  for (const [id, ps] of Object.entries<any>(scene?.params ?? {}))
+    if (rig.devices[id] && ps && typeof ps === 'object') for (const [k, v] of Object.entries(ps)) rig = setParam(rig, id, k, num(v, NaN));
   return rig;
 }
 

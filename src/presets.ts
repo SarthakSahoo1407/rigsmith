@@ -4,9 +4,9 @@
 
 import { def, type DeviceType } from './catalog';
 import {
-  addDevice, addScene, applyScene, connect, emptyRig, linkParam, mainJack as jackOf, moveDevice, placeMic, removeScene, renameScene, selectScene,
-  setFile, setParam, toggle, type FileRef, type Rig, type XY,
+  addDevice, connect, emptyRig, mainJack as jackOf, moveDevice, placeMic, setFile, setParam, toggle, type FileRef, type Rig, type XY,
 } from './rig';
+import type { LiveSet } from './sets';
 
 const mainJack = (type: DeviceType, dir: 'in' | 'out') => jackOf(type, dir)!;
 
@@ -379,66 +379,145 @@ const BASE: Record<string, Preset> = {
   }) },
 };
 
-// ---- Scenes ----
-// Builds the scenes of a preset in order: each starts from the one before, `links` are the knobs
-// that differ per scene, and each step sets footswitches and knobs for its scene.
-type Step = Record<string, Record<string, number | boolean>>;
-function withScenes(rig: Rig, links: [string, string][], scenes: [string, Step][]): Rig {
-  let r = removeScene(addScene(rig), 1); // scenes on, just scene A
-  for (const [id, name] of links) r = linkParam(r, id, name, true);
-  scenes.forEach(([name, step], i) => {
-    r = i ? addScene(r, name) : renameScene(r, 0, name);
-    for (const [id, { on, ...params }] of Object.entries(step)) {
-      if (typeof on === 'boolean' && applyScene(r).devices[id].on !== on) r = toggle(r, id);
-      for (const [k, v] of Object.entries(params)) r = setParam(r, id, k, Number(v));
-    }
-  });
-  return selectScene(r, 0);
-}
-const scened = (shape: Shape, links: [string, string][], scenes: [string, Step][]) => () => withScenes(rigOf(shape)(), links, scenes);
-
-const SCENES: Record<string, Preset> = {
-  // A clean chime amp for verses, a drive for choruses, a lead channel with more delay.
-  'Worship set': { category: 'Scenes', build: scened({
+// ---- Rigs made for playing live: one rig, many sounds, so a set's scenes switch without a gap ----
+const LIVE_RIGS: Record<string, Preset> = {
+  // A chime amp with a drive for choruses and tape delay and hall in the loop.
+  'Worship chime': { category: 'Live rigs', build: rigOf({
     pedals: [['compressor', comp(-26, 3, 4)], ['distortion', drive(OD, 4, 6, 7), { off: true }]],
-    amp: amp('chime', 4, 4, 5, 7, 6), loop: [['delay', echo('tape', 430, 0.35, 0.2)], ['reverb', verb('hall', 3.5, 0.3, 6, 30)]],
+    amp: amp('chime', 4, 4, 5, 7, 6), loop: [['delay', echo('tape', 430, 0.35, 0.18)], ['reverb', verb('hall', 3.5, 0.25, 6, 30)]],
     cab: ['2x12', 'chimey alnico'],
-  }, [['delay-1', 'mix'], ['reverb-1', 'mix'], ['amp-1', 'channel'], ['amp-1', 'master']], [
-    ['Verse', { 'distortion-1': { on: false }, 'delay-1': { mix: 0.18 }, 'reverb-1': { mix: 0.25 } }],
-    ['Chorus', { 'distortion-1': { on: true }, 'delay-1': { mix: 0.25 } }],
-    ['Lead', { 'amp-1': { channel: 2, master: 5.5 }, 'delay-1': { mix: 0.35 }, 'reverb-1': { mix: 0.3 } }],
-    ['Pad', { 'distortion-1': { on: false }, 'amp-1': { channel: 1, master: 5 }, 'delay-1': { mix: 0.45 }, 'reverb-1': { mix: 0.6 } }],
-  ]) },
-  // One head, three channels: rhythm, crunch and a boosted lead with delay.
-  'Rock band': { category: 'Scenes', build: scened({
-    pedals: [boostPedal(2)], amp: amp('plexi', 7, 6, 6, 6, 5, 6), loop: [['delay', echo('analog', 380, 0.3, 0.25)]],
-    cab: ['4x12', 'warm 25W'],
-  }, [['amp-1', 'channel'], ['amp-1', 'master']], [
-    ['Clean', { 'distortion-1': { on: false }, 'delay-1': { on: false }, 'amp-1': { channel: 0, master: 6 } }],
-    ['Rhythm', { 'amp-1': { channel: 1 } }],
-    ['Crunch', { 'distortion-1': { on: true } }],
-    ['Lead', { 'amp-1': { channel: 2, master: 6.5 }, 'delay-1': { on: true } }],
-  ]) },
-  'Metal set': { category: 'Scenes', build: scened({
+  }) },
+  // A three-channel Plexi with a boost and analog delay: clean, rhythm, crunch and lead from one head.
+  'Plexi channels': { category: 'Live rigs', build: rigOf({
+    pedals: [[...boostPedal(2), { off: true }]], amp: { ...amp('plexi', 7, 6, 6, 6, 5, 6), channel: 0 },
+    loop: [['delay', echo('analog', 380, 0.3, 0.25)]], cab: ['4x12', 'warm 25W'],
+  }) },
+  // A modern high-gain head with all three channels, gate, boost, chorus for cleans and a lead delay.
+  'Metal channels': { category: 'Live rigs', build: rigOf({
     pedals: [gate(-45), boostPedal(0), ['chorus', { rate: 0.6, depth: 0.4, mix: 0.4 }, { off: true }]],
     amp: amp('modern', 6, 5, 5, 5, 5, 5), loop: [['delay', echo('digital', 420, 0.3, 0.2, 6)]],
     cab: ['4x12', 'aggressive 60W'], mics: [['dynamic', 0.2, 0.05], ['dynamic', 0.5, 0.15]],
-  }, [['amp-1', 'channel'], ['gate-1', 'threshold']], [
-    ['Clean', { 'amp-1': { channel: 0 }, 'distortion-1': { on: false }, 'chorus-1': { on: true }, 'delay-1': { on: true } }],
-    ['Rhythm', { 'amp-1': { channel: 1 }, 'distortion-1': { on: true }, 'chorus-1': { on: false }, 'delay-1': { on: false } }],
-    ['Breakdown', { 'gate-1': { threshold: -38 } }],
-    ['Lead', { 'amp-1': { channel: 2 }, 'gate-1': { threshold: -48 }, 'delay-1': { on: true } }],
-  ]) },
-  'Ambient layers': { category: 'Scenes', build: scened({
-    pedals: [['volume', { position: 0.9 }], ['chorus', { rate: 0.5, depth: 0.5, mix: 0.35 }]],
-    amp: amp('usClean', 4, 5, 5, 6), loop: [['delay', echo('tape', 520, 0.45, 0.3, 5, 1)], ['reverb', verb('hall', 5, 0.4, 5, 40)]],
+  }) },
+  'Ambient layers': { category: 'Live rigs', build: rigOf({
+    pedals: [['volume', { position: 0.9 }], ['chorus', { rate: 0.5, depth: 0.5, mix: 0.35 }, { off: true }]],
+    amp: amp('usClean', 4, 5, 5, 6), loop: [['delay', echo('tape', 520, 0.2, 0.1, 5, 1)], ['reverb', verb('hall', 1.5, 0.15, 5, 40)]],
     cab: ['2x12', 'sparkly US'], mics: [['condenser', 0.4, 0.25]],
-  }, [['delay-1', 'mix'], ['delay-1', 'feedback'], ['reverb-1', 'mix'], ['reverb-1', 'decay']], [
-    ['Dry', { 'chorus-1': { on: false }, 'delay-1': { mix: 0.1, feedback: 0.2 }, 'reverb-1': { mix: 0.15, decay: 1.5 } }],
-    ['Wash', { 'chorus-1': { on: true }, 'delay-1': { mix: 0.3, feedback: 0.45 }, 'reverb-1': { mix: 0.45, decay: 5 } }],
-    ['Huge', { 'delay-1': { mix: 0.45, feedback: 0.6 }, 'reverb-1': { mix: 0.7, decay: 9 } }],
-  ]) },
+  }) },
 };
+
+// ---- Example live sets ----
+// Each song is a list of cues: [scene name, preset, changes to that preset]. Changes name blocks by
+// id ('amp-1', 'delay-1'...) and set a footswitch ({ on }) or knobs. Song titles are made up.
+type Step = Record<string, Record<string, number | boolean>>;
+type Cue = [name: string, preset: string, step?: Step];
+export const tweak = (rig: Rig, step: Step = {}): Rig => Object.entries(step).reduce((r, [id, { on, ...params }]) => {
+  if (!r.devices[id]) throw new Error(`No ${id} to change`);
+  if (typeof on === 'boolean' && r.devices[id].on !== on) r = toggle(r, id);
+  return Object.entries(params).reduce((x, [k, v]) => setParam(x, id, k, Number(v)), r);
+}, rig);
+const setOf = (name: string, songs: [string, Cue[]][]) => (): LiveSet => ({
+  name,
+  scenes: songs.flatMap(([song, cues]) => cues.map(([scene, preset, step]) => ({ name: scene, song, from: `b:${preset}`, rig: tweak(PRESETS[preset].build(), step) }))),
+});
+
+const SETS_LIST: [string, [string, Cue[]][]][] = [
+  ['Sunday morning', [
+    ['Open Skies', [
+      ['Intro swells', 'Ambient swells'],
+      ['Verse', 'Worship chime'],
+      ['Chorus', 'Worship chime', { 'distortion-1': { on: true }, 'delay-1': { mix: 0.25 } }],
+      ['Bridge pad', 'Worship chime', { 'delay-1': { mix: 0.45, feedback: 0.5 }, 'reverb-1': { mix: 0.6, decay: 6 } }],
+      ['Big chorus', 'Worship chime', { 'distortion-1': { on: true }, 'amp-1': { channel: 2, master: 5.5 }, 'delay-1': { mix: 0.3 } }],
+    ]],
+    ['Morning Light', [
+      ['Verse', 'Worship chime', { 'amp-1': { channel: 0 } }],
+      ['Chorus', 'Worship chime', { 'distortion-1': { on: true } }],
+      ['Lead line', 'Worship chime', { 'amp-1': { channel: 2, master: 5.5 }, 'delay-1': { mix: 0.35 }, 'reverb-1': { mix: 0.3 } }],
+    ]],
+  ]],
+  ['Rock covers night', [
+    ['Highway Nine', [
+      ['Intro riff', 'Plexi channels', { 'amp-1': { channel: 1 } }],
+      ['Verse', 'Plexi channels', { 'amp-1': { channel: 0, master: 6 } }],
+      ['Chorus', 'Plexi channels', { 'amp-1': { channel: 1 }, 'distortion-1': { on: true } }],
+      ['Solo', 'Plexi channels', { 'amp-1': { channel: 2, master: 6.5 }, 'distortion-1': { on: true }, 'delay-1': { mix: 0.3 } }],
+    ]],
+    ['Slow Burn', [
+      ['Verse', 'Glassy chorus clean'],
+      ['Chorus', 'Indie crunch'],
+      ['Solo', 'Singing lead'],
+    ]],
+    ['Last Call', [
+      ['Main riff', 'Classic rock'],
+      ['Wah break', 'Classic rock', { 'wah-1': { on: true } }],
+      ['Solo', 'Rock lead'],
+    ]],
+  ]],
+  ['Metal gig', [
+    ['Iron Tide', [
+      ['Clean intro', 'Metal channels', { 'amp-1': { channel: 0 }, 'distortion-1': { on: false }, 'chorus-1': { on: true } }],
+      ['Main riff', 'Metal channels', { 'delay-1': { on: false } }],
+      ['Breakdown', 'Metal channels', { 'delay-1': { on: false }, 'gate-1': { threshold: -38 }, 'amp-1': { bass: 6 } }],
+      ['Solo', 'Metal channels', { 'amp-1': { channel: 2 }, 'gate-1': { threshold: -48 } }],
+    ]],
+    ['Cold Engine', [
+      ['Palm-muted riff', 'Djent'],
+      ['Thrash section', 'Thrash'],
+      ['Doom outro', 'Doom'],
+    ]],
+    ['Two Walls', [
+      ['Wide riff', 'Twin stack metal'],
+      ['Lead', 'Shred lead'],
+    ]],
+  ]],
+  ['Blues night', [
+    ['Twelve Bar Shuffle', [
+      ['Rhythm', 'Blues crunch'],
+      ['Solo', 'Blues lead'],
+      ['Last chorus', 'Blues lead', { 'distortion-1': { drive: 7 }, 'delay-1': { mix: 0.28 } }],
+    ]],
+    ['Slow One in A', [
+      ['Clean verse', 'Jazz clean'],
+      ['Solo', 'Blues lead', { 'distortion-1': { on: false }, 'reverb-1': { mix: 0.3 } }],
+      ['Climax', 'Blues lead'],
+    ]],
+  ]],
+  ['Ambient and post-rock', [
+    ['Glass Horizon', [
+      ['Dry', 'Ambient layers'],
+      ['Wash', 'Ambient layers', { 'chorus-1': { on: true }, 'delay-1': { mix: 0.3, feedback: 0.45 }, 'reverb-1': { mix: 0.45, decay: 5 } }],
+      ['Huge', 'Ambient layers', { 'chorus-1': { on: true }, 'delay-1': { mix: 0.45, feedback: 0.6 }, 'reverb-1': { mix: 0.7, decay: 9 } }],
+    ]],
+    ['Tidal', [
+      ['Swells', 'Ambient swells'],
+      ['Build', 'Dual amp stereo'],
+      ['Loop it', 'Looper jam'],
+    ]],
+  ]],
+  ['Funk and country', [
+    ['Glide', [
+      ['Rhythm', 'Funk clean'],
+      ['Wah', 'Funk clean', { 'wah-1': { on: true }, 'phaser-1': { on: false } }],
+      ['Bridge', 'Glassy chorus clean'],
+    ]],
+    ['Back Porch', [
+      ['Slapback', 'Country slapback'],
+      ['Solo', 'Country slapback', { 'compressor-1': { makeup: 10 }, 'delay-1': { mix: 0.45, feedback: 0.15 } }],
+      ['Surf break', 'Surf'],
+    ]],
+  ]],
+  ['Acoustic coffeehouse', [
+    ['Paper Boats', [
+      ['Verse', 'Acoustic dreadnought'],
+      ['Chorus', 'Acoustic 12-string'],
+    ]],
+    ['Harbor Waltz', [
+      ['Fingerpicked', 'Acoustic nylon'],
+      ['Strummed', 'Acoustic dreadnought', { 'reverb-1': { mix: 0.3 } }],
+    ]],
+  ]],
+];
+export const SETS: Record<string, () => LiveSet> = Object.fromEntries(SETS_LIST.map(([name, songs]) => [name, setOf(name, songs)]));
 
 // ---- NAM captures (fetched from TONE3000 on first load) and hybrids of captures and modelled gear ----
 const NAM: Record<string, Preset> = {
@@ -485,4 +564,4 @@ const NAM: Record<string, Preset> = {
   }) },
 };
 
-export const PRESETS: Record<string, Preset> = { ...BASE, ...SCENES, ...NAM };
+export const PRESETS: Record<string, Preset> = { ...BASE, ...LIVE_RIGS, ...NAM };

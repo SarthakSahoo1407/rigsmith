@@ -203,7 +203,7 @@ export function dropHints(rig: Rig, layout: Layout, id: string, dropped: XY): Re
 // first parent's row when that cell is free, so a split opens a new row. Power gear is hidden.
 // Cables into an amp's Return are loop returns: they don't push the amp to a later column.
 
-export const TILE = { w: 168, h: 92, colGap: 64, rowGap: 32 };
+export const TILE = { w: 148, h: 164, colGap: 56, rowGap: 32 };
 
 export function layoutGrid(rig: Rig): Record<string, XY> {
   const shown = Object.values(rig.devices).filter((d) => d.type !== 'power');

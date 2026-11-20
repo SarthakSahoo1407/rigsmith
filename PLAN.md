@@ -146,12 +146,14 @@ native/Engine.h     graph build, handover to the audio thread
 native/check.cpp    offline engine check (RigCheck)
 native/render.cpp   RigRender: a guitar part (synthesised or a DI .wav) through a compiled rig into a WAV, with tone balance
 scripts/render-presets.mts  `npm run render [di.wav]`: every preset to renders/*.wav
-src/presets.ts      built-in rigs, including scene, NAM and hybrid presets
+src/presets.ts      built-in rigs (incl. live rigs, NAM, hybrids) and example live sets
 src/library.ts      the capture library and TONE3000 state as a small store; resolve() maps rig files to this Mac's
 src/Captures.tsx    Captures tab: library and the TONE3000 browser
 src/CabStudio.tsx   cab and mic studio
-src/Scenes.tsx      scene strip
-src/Live.tsx        Live mode
+src/render3d.ts     three.js renderer: oblique camera, sprite cache, useSprite()
+src/models.ts       gear models and materials (paint, chrome, tolex, tweed, cones, mics)
+src/sets.ts         live sets: setlists of scenes, each a whole rig
+src/Live.tsx        Live mode: setlist, stage, add-a-scene picker
 ```
 
 ## Phases (each ends with something playable)
@@ -167,7 +169,7 @@ src/Live.tsx        Live mode
 
 - **NAM:** `namAmp` (into a cab), `namRig` (amp + cab capture, line out) and `namPedal` blocks run NeuralAmpModelerCore at the commit pinned in CMake. Output is normalised to −18 dB from the file's loudness. A capture at a different rate warns; it isn't resampled.
 - **Library and TONE3000:** files live in `Application Support/Rig/Library/{nam,ir}` with a credits sidecar. Devices store a `FileRef` (library id + creator, license, tone). The TONE3000 client follows the API terms: download only on request, keep credits, "Powered by TONE3000", no bundling. Presets reference tones by id and `resolve()` maps them to downloaded files.
-- **Scenes:** `Rig.scenes` = up to 8 scenes, each `{ on, params }`. Footswitches are per scene; knobs are per scene only when linked. `applyScene()` gives what plays; switching changes params only, never wires, so it's gapless.
+- **Scenes (v2.1):** scenes moved out of the rig into live sets (`sets.ts`): a set is a list of `{ name, song, from, rig }`, each a whole rig from any preset. The engine diffs by structure (node ids, types, wires), so scenes of one preset switch params only, gaplessly; a scene from another preset rebuilds the graph. Older rigs with in-rig scenes open as their active scene.
 - **Amps:** channels clean/drive/lead (drive keeps the v1 knobs), bright/deep/fat, tube type, bias (crossover gap when cold), sag, supply voltage, level-matched per channel.
 - **Cabs:** `cab/spk` (modelled or IR A/B blend, low/high cut) + `cab/mix` (MicMix: up to 4 mics, pan, solo resolved in compile) feeding the cab's `outL/outR`. Mics have level, phase, align, angle; position is 2D on the cone (`x` radius, `y` direction in turns).
 - **Plugin:** AU + VST3 (`RigPlugin`), state = rig JSON + compiled rig so it plays before the editor opens; installed and re-signed by `RigPluginInstall`.

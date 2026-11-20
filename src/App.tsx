@@ -4,13 +4,13 @@ import {
   ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Trash2, Undo2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { Board, type Edit } from './Board';
-import { LiveMode } from './Live';
-import { SceneStrip } from './Scenes';
+import { LiveMode, type Stage } from './Live';
 import { download, failed, models, refresh as refreshLibrary, resolve, setKey, signIn, signOut, tone, useLibrary } from './library';
 import { GearDefs, type Live } from './gear';
 import { call, inApp, on, type Meter, type State } from './native';
-import { DEFAULT_PRESET, PRESETS } from './presets';
-import { commit, compile, history, parseRig, redo, selectScene, toggle, undo, type History, type Rig } from './rig';
+import { DEFAULT_PRESET, PRESETS, SETS } from './presets';
+import { commit, compile, history, parseRig, redo, toggle, undo, type History, type Rig } from './rig';
+import type { SetScene } from './sets';
 
 type View = 'board' | 'grid' | 'live';
 
@@ -20,7 +20,7 @@ const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A�
 const toLevel = (peak: number) => Math.max(0, Math.min(1, (20 * Math.log10(peak || 1e-6) + 60) / 60));
 
 const KEYS: [string, string][] = [
-  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['L', 'Live mode'], ['⇧1 – ⇧8', 'Scene A–H (in Live mode: 1–8, pedals Q–O)'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
+  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['L', 'Live mode'], ['1 – 9, space', 'In Live mode: pick a scene, next scene (← → too); Q–O stomp'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
   ['1 – 9', 'Stomp pedal 1–9 in signal order'], ['B', 'Bypass the selected device'], ['P', 'Plug the selected device into power'],
   ['Enter', 'Open the selected device'], ['⌫', 'Delete the selected device or cable'], ['Esc', 'Close / deselect'],
   ['\\', 'Show or hide the gear list'], ['⌘Z  ⇧⌘Z', 'Undo / redo'], ['⌘S', 'Save preset'], ['⌘O  ⌘E', 'Open / export a .rigsmith file'], ['?', 'This list'],
@@ -151,6 +151,7 @@ export function App() {
   const [help, setHelp] = useState(false);
   const [settings, setSettings] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [stage, setStage] = useState<Stage>({ set: `b:${Object.keys(SETS)[0]}`, at: -1 });
   const library = useLibrary();
 
   const flash = (msg: string) => {
@@ -183,6 +184,15 @@ export function App() {
       edit(() => rig);
       setCurrent({ key, rig });
     } else call<string | null>('loadRig', key.slice(2)).then((text) => open(text, key));
+  };
+  // A preset's rig without putting it on the board (for a live set's scenes).
+  const loadPreset = async (key: string): Promise<Rig> => key.startsWith('b:')
+    ? PRESETS[key.slice(2)].build()
+    : parseRig((await call<string | null>('loadRig', key.slice(2))) ?? 'null');
+  const play = (scene: SetScene) => {
+    const rig = resolve(scene.rig, library.entries).rig;
+    edit(() => rig, `scene:${performance.now()}`);
+    setCurrent(scene.from ? { key: scene.from, rig } : undefined);
   };
   const saveAs = async (name: string) => {
     await call('saveRig', name, JSON.stringify(hRef.current!.present));
@@ -259,13 +269,10 @@ export function App() {
     if (tuning && (k === 't' || k === 'escape')) { setTuner(false); return; }
     if (help && (k === 'escape' || k === '?')) { setHelp(false); return; }
     if (settings && k === 'escape') { setSettings(false); return; }
-    // Scenes: shift + 1-8 anywhere; plain 1-8 in Live mode, where Q-O stomp the pedals.
-    const digit = /^Digit([1-8])$/.exec(e.code)?.[1];
-    if (digit && (e.shiftKey || view === 'live')) { e.preventDefault(); edit((r) => selectScene(r, Number(digit) - 1)); return; }
+    // Live.tsx has its own keys for scenes and footswitches; tuner, mute and settings still work there.
     if (view === 'live') {
-      const stomp = 'qwertyuio'.indexOf(k);
-      if (stomp >= 0) { e.preventDefault(); document.querySelectorAll<HTMLButtonElement>('.live-stomp')[stomp]?.click(); return; }
       if (k === 'escape' || k === 'l') { setView('board'); return; }
+      if (!'tmi,?'.includes(k)) return;
     }
     const act = {
       l: () => setView('live'),
@@ -395,30 +402,27 @@ export function App() {
           </button>
           <input className="master" type="range" min={0} max={1} step={0.01} value={audio.volume} aria-label="Master volume" title="Master volume"
             onChange={(e) => setMaster(Number(e.target.value))} />
-          <span className="readout">
-            {audio.sampleRate ? `${latency.toFixed(1)} ms` : 'no audio device'} · CPU {Math.round(meter.cpu * 100)}% · RAM {Math.round(meter.ram)} MB
+          <span className="readout" title={`RAM ${Math.round(meter.ram)} MB`}>
+            {audio.sampleRate ? `${latency.toFixed(1)} ms` : 'no audio device'} · CPU {Math.round(meter.cpu * 100)}%
           </span>
           <button className="icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => setHelp(true)}><Keyboard {...icon} /></button>
           <button className="icon" title="Settings (,)" aria-label="Settings" onClick={() => setSettings(true)}><Settings2 {...icon} /></button>
         </div>
       </header>
-      {view !== 'live' && (
+      {missing.length > 0 && (
         <div className="subbar">
-          <SceneStrip rig={h.present} edit={edit} />
-          {missing.length > 0 && (
-            <div className="missing" role="status">
-              <span><i className="lamp warn" />{missing.length} {missing.length === 1 ? 'capture isn\u2019t' : 'captures aren\u2019t'} on this Mac</span>
-              {missing.some((m) => m.file.toneId !== undefined)
-                ? <button className="text-button" disabled={fetching} onClick={fetchMissing}>{fetching ? 'Downloading' : 'Get from TONE3000'}</button>
-                : <span className="hint">Add the file under Captures</span>}
-            </div>
-          )}
+          <div className="missing" role="status">
+            <span><i className="lamp warn" />{missing.length} {missing.length === 1 ? 'capture isn\u2019t' : 'captures aren\u2019t'} on this Mac</span>
+            {missing.some((m) => m.file.toneId !== undefined)
+              ? <button className="text-button" disabled={fetching} onClick={fetchMissing}>{fetching ? 'Downloading' : 'Get from TONE3000'}</button>
+              : <span className="hint">Add the file under Captures</span>}
+          </div>
         </div>
       )}
       {view === 'live' ? (
-        <LiveMode rig={h.present} edit={edit} preset={current ? current.key.slice(2) : 'Unsaved rig'}
-          category={current?.key.startsWith('b:') ? PRESETS[current.key.slice(2)]?.category : current ? 'Your preset' : undefined}
-          onStep={step} onExit={() => setView('board')} onTune={() => setTuner(true)} muted={muted} onMute={() => setMute(!muted)}
+        <LiveMode rig={h.present} edit={edit} current={current?.key} presets={presets} loadPreset={loadPreset} play={play}
+          stage={stage} setStage={setStage} flash={flash}
+          onExit={() => setView('board')} onTune={() => setTuner(true)} muted={muted} onMute={() => setMute(!muted)}
           levels={{ in: meter.peak, out: meter.out }} live={live} />
       ) : (
         <ReactFlowProvider>

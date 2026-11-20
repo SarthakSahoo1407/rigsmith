@@ -9,16 +9,17 @@ A guitar rig simulator for macOS, as an app and as an AU/VST3 plugin. Place as m
 - **Free routing.** Audio follows the cables, like a real rig. Amps have an effects loop (send/return), and splitters and joiners let you run parallel chains, for example two amps panned left and right.
 - **Power matters.** A pedal with no power cable is silent. Press P, or click "Plug into power", to wire it to a free outlet.
 - **Three views.**
-  - **Board:** the stage, the pedalboard and the desk, drawn like real gear.
-  - **Grid:** Quad Cortex-style tiles in signal order, with a panel that shows the whole rig or the selected block.
-  - **Live:** a stage screen with big scene and footswitch targets, tuner, tap tempo and levels. Knobs are out of reach.
+  - **Board:** the stage, a railed pedalboard and the desk, with every piece rendered in 3D and cables that hang with real plugs.
+  - **Grid:** Quad Cortex-style blocks in signal order, each with a picture of its gear, and a panel that shows the whole rig or the selected block.
+  - **Live:** your set on stage: the setlist on the left, the scene playing in big type, the next one, the rig's footswitches, tuner, tap tempo and levels. Knobs stay on the board.
 - **Gear:** 9 amps, 4 cabs, 3 mics and 30 pedals (dynamics, drive, fuzz, pitch, filter, modulation, delay, reverb, looper), each with its own fictional maker and look.
 - **NAM captures.** NAM amp, full-rig and pedal blocks run [Neural Amp Modeler](https://github.com/sdatkinson/NeuralAmpModelerCore) captures (`.nam`, including the A2 format).
 - **TONE3000 browser.** Search, download and use captures and IRs from [TONE3000](https://www.tone3000.com) inside the app, with each creator's name and license kept beside the file. Rigsmith ships no third-party captures: their licenses don't allow it, so presets that use them fetch them from TONE3000 on your request.
-- **Scenes.** Up to eight per preset. Each remembers which blocks are on and any knob you mark per-scene (the small S), and switching is gapless.
+- **Rendered gear.** Every pedal, amp, cab, speaker, mic, footswitch and knob is a 3D model (three.js) lit by a warm key light and rendered once to an image: you see each piece's sides, depth, chrome and tolex, while the knobs, switches and labels on top stay live. Cables hang with real plugs; the pedals sit on a railed board.
+- **Live sets and scenes.** A set is a setlist of songs, each with scenes. A scene is any sound: a built-in preset, one of yours, or what's on the board now, changed however you like (other knobs, pedals on or off). Scenes from the same preset switch without a gap; one from another preset loads its rig. Seven example sets come with it (worship, rock covers, metal, blues, ambient, funk and country, acoustic), with made-up songs and their riffs, verses, choruses and solos.
 - **Amps.** Clean, drive and lead channels with their own gain and EQ, bright/deep/fat switches, power tubes (EL34, 6L6, KT88, EL84), bias, sag and supply voltage.
 - **Cab and mic studio.** Up to four mics per cab, dragged anywhere on the speaker, each with level, pan, distance, angle, time-align, polarity and solo, mixed to the cab's stereo outs. Or real IRs in two slots with a blend and low/high cut.
-- **Presets:** 44 built-in presets (clean, acoustic, crunch, lead, metal, ambient, scenes, NAM captures, hybrids of captures and modelled gear), plus your own.
+- **Presets:** 44 built-in presets (clean, acoustic, crunch, lead, metal, ambient, live rigs, NAM captures, hybrids of captures and modelled gear), plus your own.
 - **Tools:**
   - a standalone tuner
   - master and input mute
@@ -72,15 +73,14 @@ With `RIG_DEV_URL` set, the app loads the Vite dev server, so UI changes hot-rel
   - Double-click any device for a large view with every control, plus **Replace** and **Delete**.
 - **Mics:** drag a mic onto a cab, then drag it across the cone. The centre is brighter and the edge darker. Scroll over the mic to move it closer or farther. Double-click the cab for the full mic studio.
 - **Captures:** drag a capture from **Captures** onto the rig to make a NAM block (amp, full rig or pedal by its type), or onto a cable to insert it. Drag an IR onto a cab to load it.
-- **Scenes:** **+ Add scenes** under the top bar snapshots what's playing. Switch with the scene buttons or ⇧1–⇧8; double-click one to rename it. Mark a knob per-scene with the **S** under it in a device's window.
+- **Live sets:** press **L**. Pick a set, or **+** for a new one. **Add a scene** takes a preset or what's on the board now. To make a scene its own sound, play it, change things on the board, come back and press **Save into the scene** (or **Save as a new scene**). The pencil edits names, songs and order. Changing an example set saves it as your own copy.
 - **Shortcuts:** press **?** for the full list. The main ones:
 
 | Key | Action |
 |---|---|
 | ← → | Previous / next preset |
 | V | Board / Grid |
-| L | Live mode (there: 1–8 scenes, Q–O pedals, Esc to leave) |
-| ⇧1–⇧8 | Scene A–H |
+| L | Live mode (there: 1–9 pick a scene, space or ← → step through the set, Q–O pedals, Esc to leave) |
 | , | Settings |
 | T | Tuner |
 | M / I | Mute output / mute guitar input |
@@ -91,7 +91,7 @@ With `RIG_DEV_URL` set, the app loads the Vite dev server, so UI changes hot-rel
 | ⌘Z / ⇧⌘Z | Undo / redo |
 | ⌘S / ⌘O / ⌘E | Save preset / open / export `.rigsmith` |
 
-Your rig autosaves. Named presets and the autosave live in `~/Library/Application Support/Rig/Rigs`.
+Your rig autosaves. Named presets, your live sets (`_sets.json`) and the autosave live in `~/Library/Application Support/Rig/Rigs`.
 
 ## Rig files
 
@@ -118,7 +118,8 @@ npm run render -- Metal                       # only presets matching a name or 
 - **UI:** React 19 and TypeScript, with React Flow, running in JUCE's web view.
   - `src/rig.ts` is the rig model: devices, cables, routing rules, undo, and `compile()`.
   - `src/layout.ts` places gear on the board and the grid.
-  - `src/gear.tsx` draws the gear.
+  - `src/gear.tsx` draws the gear's live controls; `src/models.ts` models each piece in three.js and `src/render3d.ts` renders the models to images (oblique camera, so a piece's face lines up with the controls on it).
+  - `src/sets.ts` holds live sets; `src/Live.tsx` is Live mode.
 - **Engine:** C++ with JUCE 8.
   - `native/Engine.h` runs the compiled rig as a node graph. It builds each new graph off the audio thread and fades between graphs, so re-cabling never clicks.
   - `native/Devices.h` holds one sound model per device. Amps have oversampled gain stages, a tone stack and a power section with sag. Cabs and the acoustic body are generated impulse responses.
@@ -131,4 +132,4 @@ npm run render -- Metal                       # only presets matching a name or 
 - **Tuning:** the tone was tuned by measurement. A real DI recording is the best way to judge and retune it (see `npm run render -- my-di.wav`).
 - **Platform:** macOS only for now. The file encryption uses CommonCrypto.
 - **Sample rate:** NAM captures are made at 48 kHz; run your interface at 48 kHz to hear them as made (Rigsmith warns otherwise).
-- **Licenses inside:** NeuralAmpModelerCore (MIT), Eigen (MPL 2.0), JUCE 8 (AGPLv3 or commercial), React Flow (MIT), lucide (ISC), Geist (SIL OFL 1.1). Powered by TONE3000.
+- **Licenses inside:** NeuralAmpModelerCore (MIT), Eigen (MPL 2.0), JUCE 8 (AGPLv3 or commercial), React Flow (MIT), three.js (MIT), lucide (ISC), Geist (SIL OFL 1.1). Powered by TONE3000.
