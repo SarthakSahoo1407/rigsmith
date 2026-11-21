@@ -1,8 +1,11 @@
-# Builds Rigsmith on macOS and Windows, runs the UI tests and the audio engine checks, and keeps the
-# apps as downloadable artifacts. The Windows build is where Windows support is proven: run it first.
+# Builds Rigsmith on macOS and Windows, runs the UI tests and the audio engine checks, and makes an
+# installer for each: Rigsmith-Setup-Windows.exe and Rigsmith-macOS.pkg. Pushing a tag like v1.0.0
+# publishes them as a GitHub Release.
 name: build
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -22,6 +25,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          case "$GITHUB_REF" in refs/tags/v*) echo "version=${tag#v}" >> "$GITHUB_OUTPUT" ;; *) echo "version=0.0.0" >> "$GITHUB_OUTPUT" ;; esac
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -35,16 +44,31 @@ jobs:
           check=$(find native/build -name 'RigCheck*' -type f -perm -u+x | grep -v '\.dir' | head -1)
           [ -n "$check" ] || check=native/build/RigCheck_artefacts/Release/RigCheck.exe
           "$check"
-      - name: Collect the Windows app
+
+      - name: Windows installer
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir dist-app
           cp -r native/build/Rig_artefacts/Release/. dist-app/
           cp -r native/build/RigPlugin_artefacts/Release/VST3 dist-app/VST3
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows'
-        with: { name: Rigsmith-Windows, path: dist-app }
-      - uses: actions/upload-artifact@v4
+          choco install innosetup -y --no-progress
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DAppVersion=${{ steps.v.outputs.version }}" "/DAppDir=$PWD/dist-app" "/O$PWD/out" installer/windows/Rigsmith.iss
+      - name: macOS installer
         if: runner.os == 'macOS'
-        with: { name: Rigsmith-macOS, path: native/build/Rig_artefacts/Release/Rigsmith.app }
+        run: installer/macos/build-pkg.sh "${{ steps.v.outputs.version }}" native/build out
+
+      - uses: actions/upload-artifact@v4
+        with: { name: "installer-${{ matrix.name }}", path: out/*, if-no-files-found: error }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: installer-*, path: installers, merge-multiple: true }
+      - name: Publish the release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release create "$GITHUB_REF_NAME" installers/* --repo "$GITHUB_REPOSITORY" --title "Rigsmith ${GITHUB_REF_NAME#v}" --generate-notes
