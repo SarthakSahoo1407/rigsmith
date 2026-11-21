@@ -13,12 +13,9 @@ jobs:
   build:
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            name: macOS
-          - os: windows-2022
-            name: Windows
+      # The Mac build is the slow one (about an hour from scratch), so it runs for releases (a v* tag),
+      # pull requests and manual runs; every push to main builds Windows only.
+      matrix: ${{ fromJSON(github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v') && '{"include":[{"os":"windows-2022","name":"Windows","targets":"Rig RigCheck RigUi RigPlugin_VST3 RigPluginUi"}]}' || '{"include":[{"os":"macos-latest","name":"macOS","targets":"Rig RigCheck RigUi RigPlugin_VST3 RigPlugin_AU RigPluginInstall"},{"os":"windows-2022","name":"Windows","targets":"Rig RigCheck RigUi RigPlugin_VST3 RigPluginUi"}]}') }}
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
     steps:
@@ -31,13 +28,21 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           case "$GITHUB_REF" in refs/tags/v*) echo "version=${tag#v}" >> "$GITHUB_OUTPUT" ;; *) echo "version=0.0.0" >> "$GITHUB_OUTPUT" ;; esac
+      # Compiler cache: JUCE and the NAM core are the same every build, so only the first build is slow.
+      - uses: hendrikmuhs/ccache-action@v1.2
+        if: runner.os == 'macOS'
+        with: { key: "ccache-${{ matrix.os }}", max-size: 1G }
       - run: npm ci
       - run: npm test
       - run: npm run build
       - name: Configure
-        run: cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+        run: |
+          extra=""
+          if [ "$RUNNER_OS" = "macOS" ]; then extra="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache"; fi
+          cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release $extra
       - name: Build
-        run: cmake --build native/build --config Release --parallel
+        run: cmake --build native/build --config Release --parallel --target ${{ matrix.targets }}
       - name: Audio engine checks
         shell: bash
         run: |
