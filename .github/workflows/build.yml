@@ -1,0 +1,50 @@
+# Builds Rigsmith on macOS and Windows, runs the UI tests and the audio engine checks, and keeps the
+# apps as downloadable artifacts. The Windows build is where Windows support is proven: run it first.
+name: build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            name: macOS
+          - os: windows-2022
+            name: Windows
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Configure
+        run: cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build native/build --config Release --parallel
+      - name: Audio engine checks
+        shell: bash
+        run: |
+          check=$(find native/build -name 'RigCheck*' -type f -perm -u+x | grep -v '\.dir' | head -1)
+          [ -n "$check" ] || check=native/build/RigCheck_artefacts/Release/RigCheck.exe
+          "$check"
+      - name: Collect the Windows app
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir dist-app
+          cp -r native/build/Rig_artefacts/Release/. dist-app/
+          cp -r native/build/RigPlugin_artefacts/Release/VST3 dist-app/VST3
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with: { name: Rigsmith-Windows, path: dist-app }
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with: { name: Rigsmith-macOS, path: native/build/Rig_artefacts/Release/Rigsmith.app }

@@ -137,3 +137,23 @@ npm run render -- Metal                       # only presets matching a name or 
 - **Licenses inside:** NeuralAmpModelerCore (MIT), Eigen (MPL 2.0), JUCE 8 (AGPLv3 or commercial), React Flow (MIT), three.js (MIT), lucide (ISC), Geist (SIL OFL 1.1). Powered by TONE3000.
 
 `npm run dev`, then open `preview.html?preset=Shred%20lead&kind=pedals` (or `kind=amps`) to look at the gear in a plain browser, no app needed.
+
+## Windows
+
+Rigsmith builds for Windows 10 and 11 as an app and a VST3 plugin (no AU: that's Apple's format). The
+UI runs in Microsoft Edge WebView2, which Windows 11 and current Windows 10 already include.
+
+Build it with Visual Studio 2022 (the "Desktop development with C++" workload), CMake and Node 22:
+
+```
+npm ci
+npm run build
+cmake -S native -B native/build
+cmake --build native/build --config Release
+```
+
+- The app is `native/build/Rig_artefacts/Release/Rigsmith.exe`, with its `ui` folder beside it: keep them together.
+- The plugin is `native/build/RigPlugin_artefacts/Release/VST3/Rigsmith.vst3`. Copy the whole folder to `C:\Program Files\Common Files\VST3` (administrator rights needed).
+- Rigs, captures and settings live in `%APPDATA%\Rigsmith`. `.rigsmith` files open on both systems.
+- Audio uses WASAPI, which works with any interface but has more latency than a Mac. For low latency use your interface's ASIO driver: download Steinberg's ASIO SDK, and configure with `-DRIG_ASIO_SDK=<folder>` (the SDK's licence doesn't let us ship it).
+- `.github/workflows/build.yml` builds both platforms and keeps the results as downloads.

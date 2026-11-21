@@ -49,7 +49,7 @@ struct Nam : Node // p: input dB, output dB
         {
             try
             {
-                model = nam::get_dsp (std::filesystem::path (path.toStdString()));
+                model = nam::get_dsp (std::filesystem::path (path.toWideCharPointer()));
                 model->Reset (sr, maxBlock);
             }
             catch (const std::exception& e) { DBG ("NAM load failed: " << e.what()); lastError = e.what(); model = nullptr; }

@@ -246,9 +246,9 @@ export const colorOf = (type: DeviceType, params: Record<string, number> = {}) =
 
 // Knob finish and typeface per pedal, keyed by type, or type + model for pedals with variants.
 type Look = { cap: 'black' | 'chrome' | 'cream' | 'chicken' | 'gold'; font: string; upper?: boolean };
-const SANS = 'Futura, "Avenir Next", sans-serif', COND = '"Avenir Next Condensed", "Arial Narrow", sans-serif', IMPACT = 'Impact, "Arial Black", sans-serif';
-const SCRIPT = '"Snell Roundhand", "Brush Script MT", cursive', SERIF = 'Baskerville, Georgia, serif', TYPE = '"American Typewriter", Courier, serif';
-const DIDOT = 'Didot, "Bodoni 72", serif', PLATE = 'Copperplate, "Copperplate Gothic Light", serif';
+const SANS = 'Futura, "Avenir Next", "Jost Variable", sans-serif', COND = '"Avenir Next Condensed", "Barlow Condensed", "Arial Narrow", sans-serif', IMPACT = 'Impact, "Arial Black", sans-serif';
+const SCRIPT = '"Snell Roundhand", "Brush Script MT", "Pinyon Script", cursive', SERIF = 'Baskerville, "Libre Baskerville Variable", Georgia, serif', TYPE = '"American Typewriter", "Courier Prime", Courier, serif';
+const DIDOT = 'Didot, "Bodoni 72", "Playfair Display Variable", serif', PLATE = 'Copperplate, "Copperplate Gothic Light", serif';
 const LOOKS: Record<string, Look> = {
   tuner: { cap: 'black', font: SANS, upper: true }, gate: { cap: 'black', font: SANS, upper: true },
   compressor: { cap: 'cream', font: SERIF }, boost0: { cap: 'chrome', font: COND, upper: true },

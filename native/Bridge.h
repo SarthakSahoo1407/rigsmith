@@ -7,8 +7,8 @@
 #include "Engine.h"
 #include "RigFile.h"
 #include "Llm.h"
+#include "Platform.h"
 #include "Tone3000.h"
-#include <mach/mach.h>
 
 namespace rig
 {
@@ -21,6 +21,9 @@ inline PropertiesFile& sharedSettings()
         o.applicationName = "Rig";
         o.filenameSuffix = ".settings";
         o.osxLibrarySubFolder = "Application Support";
+#if ! JUCE_MAC
+        o.folderName = "Rigsmith";
+#endif
         props.setStorageParameters (o);
         return true;
     }();
@@ -62,7 +65,7 @@ public:
     {
         using Args = const Array<var>&;
         using Done = WebBrowserComponent::NativeFunctionCompletion;
-        return WebBrowserComponent::Options {}
+        auto opts = WebBrowserComponent::Options {}
             .withNativeIntegrationEnabled()
             .withResourceProvider ([] (const String& url) { return serveUi (url); })
             .withNativeFunction ("getState", [this] (Args, Done done) { done (state()); })
@@ -122,6 +125,13 @@ public:
             .withNativeFunction ("llmStatus", [this] (Args, Done done) { done (llm.status()); })
             .withNativeFunction ("llmChat", [this] (Args a, Done done) { llm.chat (a[0], done); })
             .withNativeFunction ("llmModels", [this] (Args, Done done) { llm.freeModels (done); });
+#if JUCE_WINDOWS
+        // Windows draws the UI with Edge WebView2; its profile folder must be somewhere writable.
+        opts = std::move (opts)
+                   .withBackend (WebBrowserComponent::Options::Backend::webview2)
+                   .withWinWebView2Options (WebBrowserComponent::Options::WinWebView2 {}.withUserDataFolder (platform::dataDir().getChildFile ("WebView2")));
+#endif
+        return opts;
     }
 
 private:
@@ -162,7 +172,7 @@ private:
 
     static File rigsDir()
     {
-        auto d = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Application Support/Rig/Rigs");
+        auto d = platform::dataDir().getChildFile ("Rigs");
         d.createDirectory();
         return d;
     }
@@ -237,14 +247,7 @@ private:
             emit ("live", live());
     }
 
-    // What Activity Monitor shows as this process's memory (the web view runs in its own processes).
-    static double memoryMb()
-    {
-        task_vm_info_data_t info {};
-        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-        if (task_info (mach_task_self(), TASK_VM_INFO, (task_info_t) &info, &count) != KERN_SUCCESS) return 0;
-        return (double) info.phys_footprint / (1024.0 * 1024.0);
-    }
+    static double memoryMb() { return platform::memoryMb(); }
 
     // Per-device readouts: tuner pitch, gate state, looper state, NAM capture problems.
     var live()
@@ -285,10 +288,10 @@ private:
         return o;
     }
 
-    // Serves the built React UI from <bundle>/Contents/Resources/ui (the app, or the plugin bundle).
+    // Serves the built React UI (platform::uiRoot: the app's or plugin's resources folder).
     static std::optional<WebBrowserComponent::Resource> serveUi (const String& url)
     {
-        static const File root = File::getSpecialLocation (File::currentExecutableFile).getParentDirectory().getSiblingFile ("Resources").getChildFile ("ui");
+        static const File root = platform::uiRoot();
         const auto path = url == "/" ? String ("index.html") : url.fromFirstOccurrenceOf ("/", false, false).upToFirstOccurrenceOf ("?", false, false);
         const auto file = root.getChildFile (path);
         if (! file.isAChildOf (root) || ! file.existsAsFile())

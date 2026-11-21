@@ -4,6 +4,7 @@
 #pragma once
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_dsp/juce_dsp.h>
+#include "Platform.h"
 
 namespace rig
 {
@@ -254,7 +255,7 @@ inline AudioBuffer<float> designIr (double sr, int length, const Curve& curve, f
 // A library id is "<kind>/<file name>"; anything that tries to leave the folder resolves to nothing.
 inline File libraryDir()
 {
-    auto d = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Application Support/Rig/Library");
+    auto d = platform::dataDir().getChildFile ("Library");
     d.getChildFile ("nam").createDirectory();
     d.getChildFile ("ir").createDirectory();
     return d;

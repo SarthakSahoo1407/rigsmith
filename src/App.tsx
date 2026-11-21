@@ -4,6 +4,7 @@ import {
   ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Sparkles, Trash2, Undo2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { Board, type Edit } from './Board';
+import { mod, REDO } from './platform';
 import { Assistant, AssistantSettings } from './Assistant';
 import { Picker } from './Picker';
 import { LiveMode, type Stage } from './Live';
@@ -26,7 +27,7 @@ const KEYS: [string, string][] = [
   ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['X', 'Mixer'], ['L', 'Live mode'], ['1 – 9, space', 'In Live mode: pick a scene, next scene (← → too); Q–O stomp'], ['/', 'Ask the assistant (type a change)'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
   ['1 – 9', 'Stomp pedal 1–9 in signal order'], ['B', 'Bypass the selected device'], ['P', 'Plug the selected device into power'],
   ['Enter', 'Open the selected device'], ['⌫', 'Delete the selected device or cable'], ['Esc', 'Close / deselect'],
-  ['\\', 'Show or hide the gear list'], ['⌘Z  ⇧⌘Z', 'Undo / redo'], ['⌘S', 'Save preset'], ['⌘O  ⌘E', 'Open / export a .rigsmith file'], ['?', 'This list'],
+  ['\\', 'Show or hide the gear list'], [`${mod}Z  ${REDO}`, 'Undo / redo'], [`${mod}S`, 'Save preset'], [`${mod}O  ${mod}E`, 'Open / export a .rigsmith file'], ['?', 'This list'],
 ];
 
 // The standalone tuner, styled after a studio app's: an arc from -50 to +50 cents, an orange needle
@@ -369,8 +370,8 @@ export function App() {
           <button aria-pressed={view === 'live'} onClick={() => setView('live')} title="Live mode (L)">Live</button>
         </div>
         <div className="tool-group">
-          <button className="icon" disabled={!h.past.length} onClick={() => apply(undo(h))} title="Undo (⌘Z)" aria-label="Undo"><Undo2 {...icon} /></button>
-          <button className="icon" disabled={!h.future.length} onClick={() => apply(redo(h))} title="Redo (⇧⌘Z)" aria-label="Redo"><Redo2 {...icon} /></button>
+          <button className="icon" disabled={!h.past.length} onClick={() => apply(undo(h))} title={`Undo (${mod}Z)`} aria-label="Undo"><Undo2 {...icon} /></button>
+          <button className="icon" disabled={!h.future.length} onClick={() => apply(redo(h))} title={`Redo (${REDO})`} aria-label="Redo"><Redo2 {...icon} /></button>
         </div>
         <div className="preset">
           {saving === null ? (
@@ -383,7 +384,7 @@ export function App() {
                 ]} />
               <button className="icon" title="Next preset (→)" aria-label="Next preset" onClick={() => step(1)}><ChevronRight {...icon} /></button>
               {current && current.rig !== h.present && <span className="edited">edited</span>}
-              <button className="icon" title="Save as preset (⌘S)" aria-label="Save as preset" onClick={() => setSaving(userPreset ?? '')}><Save {...icon} /></button>
+              <button className="icon" title={`Save as preset (${mod}S)`} aria-label="Save as preset" onClick={() => setSaving(userPreset ?? '')}><Save {...icon} /></button>
               {userPreset && (
                 <button className="icon" title={`Delete ${userPreset}`} aria-label={`Delete preset ${userPreset}`} onClick={async () => {
                   await call('deleteRig', userPreset);
@@ -392,8 +393,8 @@ export function App() {
                   flash(`Deleted ${userPreset}`);
                 }}><Trash2 {...icon} /></button>
               )}
-              <button className="icon" title="Open a .rigsmith file (⌘O)" aria-label="Open rig file" onClick={importFile}><FolderOpen {...icon} /></button>
-              <button className="icon" title="Export as .rigsmith (⌘E)" aria-label="Export rig file" onClick={exportFile}><Download {...icon} /></button>
+              <button className="icon" title={`Open a .rigsmith file (${mod}O)`} aria-label="Open rig file" onClick={importFile}><FolderOpen {...icon} /></button>
+              <button className="icon" title={`Export as .rigsmith (${mod}E)`} aria-label="Export rig file" onClick={exportFile}><Download {...icon} /></button>
             </>
           ) : (
             <form className="save-form" onSubmit={(e) => { e.preventDefault(); if (saving.trim()) saveAs(saving.trim()); }}>
