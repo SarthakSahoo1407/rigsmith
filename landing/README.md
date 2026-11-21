@@ -12,4 +12,4 @@ The download is a ZIP of the local Apple silicon standalone build. To refresh it
 ditto -c -k --keepParent native/build/Rig_artefacts/Release/Rigsmith.app landing/assets/Rigsmith-macOS-arm64.zip
 ```
 
-When the GitHub repository opens, replace the pending star control in `index.html` with a link to the repository and point the contribution action to its contribution guide or issue tracker.
+The page links to https://github.com/SarthakSahoo1407/rigsmith (source, issues, releases, the Windows build steps). The repository is private for now, so those links only work for people with access: make it public before sharing the page. A Windows download will go here once the Windows build is checked: until then it says to build from source.

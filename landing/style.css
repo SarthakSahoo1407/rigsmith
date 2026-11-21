@@ -128,3 +128,8 @@ h2 { font-size: clamp(40px, 6.4vw, 88px); margin-block: 12px 24px; }
   .facts, .facts.two { grid-template-columns: 1fr; gap: 24px; }
   .footer { flex-direction: column; align-items: flex-start; }
 }
+
+.download-links { list-style: none; margin: 24px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 24px; }
+.download-links .text-link { font-size: 15px; }
+.text-link.small { font-size: 13px; }
+.button.secondary:hover { border-color: var(--mut); }
