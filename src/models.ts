@@ -86,16 +86,23 @@ const cloth = (a: string, b: string) => canvasTexture(`cloth${a}${b}`, 32, (g, s
 }, 10, true);
 
 // ---- Materials ----
-const paint = (color: string, flake = 0.15) =>
-  new THREE.MeshPhysicalMaterial({ color, roughness: 0.38, metalness: flake, clearcoat: 1, clearcoatRoughness: 0.1 });
-const chrome = () => new THREE.MeshStandardMaterial({ color: 0xe9eaec, metalness: 1, roughness: 0.12 });
-const nickel = () => new THREE.MeshStandardMaterial({ color: 0xb9bbbf, metalness: 1, roughness: 0.3 });
+// `userData.env` asks render3d for that much room reflection (the scene default is dim, for tolex and
+// paper). Plated metal is near-mirror with a strong reflection, so it shows bright highlights and dark
+// bands instead of grey plastic.
+const shiny = <M extends THREE.Material>(m: M, env: number) => { m.userData.env = env; return m; };
+// Powder-coated aluminium, the way a real pedal's enclosure is finished: a fine orange-peel grain, a
+// satin sheen and a thin sealing coat, not showroom gloss.
+const POWDER = () => canvasTexture('powder', 128, noise(255, 31), 2.4);
+const paint = (color: string, flake = 0.12) =>
+  shiny(new THREE.MeshPhysicalMaterial({ color: new THREE.Color(color).multiplyScalar(0.78), roughness: 0.5, metalness: flake, bumpMap: POWDER(), bumpScale: 1.3, clearcoat: 0.25, clearcoatRoughness: 0.55 }), 0.7);
+const chrome = () => shiny(new THREE.MeshStandardMaterial({ color: 0xf6f7f9, metalness: 1, roughness: 0.05 }), 2.6);
+const nickel = () => shiny(new THREE.MeshStandardMaterial({ color: 0xb4b7bb, metalness: 1, roughness: 0.26 }), 1.3);
 const plastic = (color = '#121213', roughness = 0.42) => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
 const rubber = () => new THREE.MeshStandardMaterial({ color: 0x0d0d0e, roughness: 0.85 });
 const tolex = (color: string) => color === 'tweed'
   ? new THREE.MeshStandardMaterial({ map: TWEED(), roughness: 0.82, bumpMap: TWEED(), bumpScale: 0.6 })
   : new THREE.MeshStandardMaterial({ color, roughness: 0.86, bumpMap: TOLEX(), bumpScale: 1.4 });
-const brushed = (color: string) => new THREE.MeshStandardMaterial({ color, metalness: 1, roughness: 0.42, roughnessMap: BRUSHED(), bumpMap: BRUSHED(), bumpScale: 0.3 });
+const brushed = (color: string) => shiny(new THREE.MeshStandardMaterial({ color, metalness: 1, roughness: 0.32, roughnessMap: BRUSHED(), bumpMap: BRUSHED(), bumpScale: 0.3 }), 1.7);
 
 // ---- Shapes and solids ----
 // A rounded rectangle, top-left at (x, y) in board coordinates (y down), as a three shape (y up).
@@ -149,6 +156,7 @@ function knurl(m: THREE.Mesh, ribs: number, depth: number) {
 function lathe(x: number, y: number, profile: [number, number][], mat: Mat, segs = 64) {
   const g = new THREE.LatheGeometry(profile.map(([r, z]) => new THREE.Vector2(r, z)), segs);
   g.rotateX(Math.PI / 2);
+  mat.side = THREE.DoubleSide; // turned parts are drawn from one side only; never cull their faces
   const m = new Mesh(g, mat);
   m.position.set(x, -y, 0);
   return m;
@@ -160,7 +168,7 @@ const PEDAL_DEPTH = 46;
 export function pedalShell(shape: Shape, w: number, h: number, color: string, treadle = false): Model {
   const round = shape === 'round';
   const mat = treadle ? new THREE.MeshStandardMaterial({ color: '#1b1b1c', roughness: 0.7, bumpMap: WRINKLE(), bumpScale: 1.5 })
-    : shape === 'hammered' ? new THREE.MeshStandardMaterial({ color: '#c3c7cc', metalness: 0.9, roughness: 0.3, bumpMap: HAMMER(), bumpScale: 2 })
+    : shape === 'hammered' ? shiny(new THREE.MeshStandardMaterial({ color: '#d4d7db', metalness: 1, roughness: 0.2, bumpMap: HAMMER(), bumpScale: 2 }), 2)
     : paint(color);
   const body = slab(w, h, shape === 'compact' ? 12 : 9, treadle ? 58 : PEDAL_DEPTH, round ? 10 : 6, mat, round);
   // Jacks on the right side, where the light catches their nuts.
@@ -174,17 +182,20 @@ export function pedalShell(shape: Shape, w: number, h: number, color: string, tr
   return { group: group(body, ...jacks), view: 'floor' };
 }
 
-// A chrome stomp switch, centred on (0, 0).
+// A stomp switch like a real one: a hex nut on the threaded bushing, a washer, and a tall cap of
+// brushed nickel with a chamfered, slightly dished top. Centred on (0, 0).
 export function footswitch(): Model {
-  const nut = cyl(0, 0, 13, 13, 0, 4, chrome(), 6);
-  const collar = cyl(0, 0, 9, 9, 4, 10, nickel());
-  const cap = lathe(0, 0, [[0, 17], [6, 16.4], [9.5, 14.5], [10.5, 12], [10.5, 10]], chrome());
-  return { group: group(nut, collar, cap), view: 'floor', scale: 3 };
+  const nut = cyl(0, 0, 11, 11, 0, 5, new THREE.MeshStandardMaterial({ color: '#8d9095', metalness: 1, roughness: 0.45 }), 6);
+  const turned = shiny(new THREE.MeshStandardMaterial({ color: 0xe4e6ea, metalness: 1, roughness: 0.14, bumpMap: RINGS(), bumpScale: 0.6 }), 2.2);
+  const cap = lathe(0, 0, [[0, 23], [8, 22.7], [12.6, 21.5], [14, 19.6], [14, 8], [12.6, 8]], turned);
+  const groove = lathe(0, 0, [[14.05, 15.6], [13.2, 15.2], [13.2, 14.2], [14.05, 13.8]], new THREE.MeshStandardMaterial({ color: '#2a2b2e', metalness: 0.6, roughness: 0.5 }));
+  const rim = lathe(0, 0, [[11, 22.9], [13.2, 21.7], [13.9, 20.3]], chrome());
+  return { group: group(nut, cap, groove, rim), view: 'floor', scale: 3 };
 }
 
 // The amber jewel pilot lamp, centred, lit or not.
 export function jewel(lit: boolean, view: 'floor' | 'stand' = 'stand'): Model {
-  const bezel = cyl(0, 0, 9, 8.5, 0, 3, chrome());
+  const bezel = cyl(0, 0, 9.5, 9, 0, 3.4, chrome());
   const g = new THREE.IcosahedronGeometry(6.5, 1);
   g.scale(1, 1, 0.7);
   const glass = new Mesh(g, new THREE.MeshPhysicalMaterial({
@@ -202,8 +213,8 @@ const FINISH: Record<Finish, () => { body: Mat; top: Mat; mark: Mat; ribs: boole
   chicken: () => ({ body: plastic('#141415', 0.5), top: plastic('#1b1b1d', 0.28), mark: plastic('#f2f2f2', 0.4), ribs: true }),
   chrome: () => ({ body: chrome(), top: chrome(), mark: plastic('#111'), ribs: false }),
   cream: () => ({ body: plastic('#e8dfc6', 0.45), top: plastic('#efe7d0', 0.3), mark: plastic('#1a1a1a'), ribs: true }),
-  gold: () => ({ body: new THREE.MeshStandardMaterial({ color: '#d4b060', metalness: 1, roughness: 0.25 }),
-    top: new THREE.MeshStandardMaterial({ color: '#e2c47a', metalness: 1, roughness: 0.18 }), mark: plastic('#111'), ribs: true }),
+  gold: () => ({ body: shiny(new THREE.MeshStandardMaterial({ color: '#d4b060', metalness: 1, roughness: 0.12 }), 2.2),
+    top: shiny(new THREE.MeshStandardMaterial({ color: '#e2c47a', metalness: 1, roughness: 0.08 }), 2.2), mark: plastic('#111'), ribs: true }),
 };
 export function knobBody(finish: Finish, view: 'floor' | 'stand'): Model {
   const f = FINISH[finish]();
@@ -213,7 +224,7 @@ export function knobBody(finish: Finish, view: 'floor' | 'stand'): Model {
 }
 export function knobTop(finish: Finish, view: 'floor' | 'stand'): Model {
   const f = FINISH[finish]();
-  const top = lathe(0, 0, [[0, 12.8], [9, 12.6], [10.4, 12]], f.top);
+  const top = lathe(0, 0, [[0, 12.9], [8.4, 12.8], [10.2, 12.2], [10.6, 11.4]], f.top);
   const parts: THREE.Object3D[] = [top];
   if (finish === 'chicken') {
     const s = new THREE.Shape();

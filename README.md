@@ -19,6 +19,7 @@ A guitar rig simulator for macOS, as an app and as an AU/VST3 plugin. Place as m
 - **Live sets and scenes.** A set is a setlist of songs, each with scenes. A scene is any sound: a built-in preset, one of yours, or what's on the board now, changed however you like (other knobs, pedals on or off). Scenes from the same preset switch without a gap; one from another preset loads its rig. Seven example sets come with it (worship, rock covers, metal, blues, ambient, funk and country, acoustic), with made-up songs and their riffs, verses, choruses and solos.
 - **Amps.** Clean, drive and lead channels with their own gain and EQ, bright/deep/fat switches, power tubes (EL34, 6L6, KT88, EL84), bias, sag and supply voltage.
 - **Cab and mic studio.** Up to four mics per cab, dragged anywhere on the speaker, each with level, pan, distance, angle, time-align, polarity and solo, mixed to the cab's stereo outs. Or real IRs in two slots with a blend and low/high cut.
+- **Tempo.** One BPM for the whole rig (type it, nudge it with ↑ ↓, or tap). Delays and chorus, flanger, phaser and tremolo can lock to a note length (1/2 to 1/16, dotted and triplet) instead of a free time or rate. Standalone only: a plugin doesn't read the host's tempo yet.
 - **Presets:** 44 built-in presets (clean, acoustic, crunch, lead, metal, ambient, live rigs, NAM captures, hybrids of captures and modelled gear), plus your own.
 - **Tools:**
   - a standalone tuner
@@ -133,3 +134,5 @@ npm run render -- Metal                       # only presets matching a name or 
 - **Platform:** macOS only for now. The file encryption uses CommonCrypto.
 - **Sample rate:** NAM captures are made at 48 kHz; run your interface at 48 kHz to hear them as made (Rigsmith warns otherwise).
 - **Licenses inside:** NeuralAmpModelerCore (MIT), Eigen (MPL 2.0), JUCE 8 (AGPLv3 or commercial), React Flow (MIT), three.js (MIT), lucide (ISC), Geist (SIL OFL 1.1). Powered by TONE3000.
+
+`npm run dev`, then open `preview.html?preset=Shred%20lead&kind=pedals` (or `kind=amps`) to look at the gear in a plain browser, no app needed.

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { DeviceType } from './catalog';
+import { CATALOG, type DeviceType } from './catalog';
 import {
   addDevice, canConnect, commit, compile, connect, emptyRig, history, insertIntoCable, isPowered, parseRig,
-  placeMic, powerUp, redo, removeDevice, replaceDevice, setFile, setParam, toggle, undo, type Rig,
+  placeMic, powerUp, redo, removeDevice, replaceDevice, setFile, setParam, setTempo, toggle, undo, type Rig,
 } from './rig';
 
 const at = { x: 0, y: 0 };
@@ -413,5 +413,36 @@ describe('mixer and replace', async () => {
     const [next, id] = replaceDevice(rig, 'distortion-1', 'fuzz');
     expect(next.devices[id]).toMatchObject({ type: 'fuzz', on: false, hotkey: 'q' });
     expect(next.cables.map((c) => `${c.from.device}>${c.to.device}`).sort()).toEqual([`${id}>output-1`, `input-1>${id}`]);
+  });
+});
+
+describe('BPM sync', () => {
+  const nodeParam = (rig: Rig, id: string, name: string) => {
+    const type = rig.devices[id].type;
+    rig = powerUp(rig, id); // an unplugged pedal isn't in the engine's graph
+    return compile(rig).nodes.find((n) => n.id === id)!.params[CATALOG[type].params.findIndex((p) => p.name === name)];
+  };
+  const synced = (type: DeviceType, sync: number, bpm?: number) => {
+    let [rig, [id]] = build(type);
+    rig = setParam(rig, id, 'sync', sync);
+    if (bpm) rig = setTempo(rig, bpm);
+    return [rig, id] as const;
+  };
+  it('a delay follows the tempo: 1/8 at 120 BPM is 250 ms, dotted 1/8 at 100 is 450 ms', () => {
+    expect(nodeParam(...synced('delay', 5, 120), 'time')).toBeCloseTo(250);
+    expect(nodeParam(...synced('delay', 4, 100), 'time')).toBeCloseTo(450);
+  });
+  it('modulation rate follows the tempo: 1/4 at 120 BPM is 2 Hz, and stays inside the knob range', () => {
+    expect(nodeParam(...synced('tremolo', 3, 120), 'rate')).toBeCloseTo(2);
+    expect(nodeParam(...synced('chorus', 7, 240), 'rate')).toBe(5); // 16 Hz, clamped to the chorus's top
+    expect(nodeParam(...synced('delay', 1, 40), 'time')).toBe(2000); // 3000 ms, clamped
+  });
+  it('free leaves the knob in charge, and the tempo is clamped and saved with the rig', () => {
+    let [rig, [id]] = build('delay');
+    rig = setParam(setTempo(rig, 90), id, 'time', 333);
+    expect(nodeParam(rig, id, 'time')).toBe(333);
+    expect(setTempo(rig, 1000).tempo).toBe(240);
+    expect(setTempo(rig, 5).tempo).toBe(40);
+    expect(parseRig(JSON.stringify(rig)).tempo).toBe(90);
   });
 });

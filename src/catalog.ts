@@ -35,6 +35,10 @@ const pedal = (label: string, mA: number, params: Param[], jacks = [IN, OUT, DC]
   label, jacks, params, power: { volts: 9, mA }, footswitch: true,
 });
 const knob = (name: string, def = 5) => p(name, 0, 10, def);
+// BPM sync: a note length of the rig's tempo (Rig.tempo) sets a delay's time or a modulation's rate
+// (rig.ts compile). 'free' leaves the knob in charge. Always the last param, so engine order is unchanged.
+export const SYNC = [['free', 0], ['1/2', 2], ['dotted 1/4', 1.5], ['1/4', 1], ['dotted 1/8', 0.75], ['1/8', 0.5], ['1/8 triplet', 1 / 3], ['1/16', 0.25]] as const;
+const sync = () => choice('sync', SYNC.map(([n]) => n));
 const mix = (def = 0.5) => p('mix', 0, 1, def);
 
 // Amp models, in the order native/Devices.h AMPS lists them. Named for what they're modelled on.
@@ -61,11 +65,11 @@ export const CATALOG = {
   eq: pedal('EQ', 20, [...[100, 200, 400, 800, 1600, 3200, 6400].map((hz) => p(`${hz}Hz`, -12, 12, 0)), p('level', -12, 12, 0)]),
   wah: pedal('Wah', 10, [p('position', 0, 1, 0.5), p('q', 1, 10, 4)]),
   volume: { label: 'Volume', jacks: [IN, OUT], params: [p('position', 0, 1, 1)] },
-  chorus: pedal('Chorus', 20, [p('rate', 0.1, 5, 0.8), p('depth', 0, 1, 0.5), mix()], [IN, ...STEREO_OUT, DC]),
-  flanger: pedal('Flanger', 20, [p('rate', 0.05, 5, 0.3), p('depth', 0, 1, 0.6), p('feedback', 0, 0.95, 0.5), mix()]),
-  phaser: pedal('Phaser', 15, [p('rate', 0.05, 5, 0.5), p('depth', 0, 1, 0.7), p('feedback', 0, 0.9, 0.3), choice('stages', ['4', '6', '8'])]),
-  tremolo: pedal('Tremolo', 10, [p('rate', 0.5, 15, 5), p('depth', 0, 1, 0.5), choice('shape', ['sine', 'square'])]),
-  delay: pedal('Delay', 100, [choice('model', ['Digital', 'Tape', 'Analog']), p('time', 20, 2000, 400), p('feedback', 0, 0.95, 0.35), knob('tone', 6), mix(0.35), choice('pingpong', ['off', 'on'])], [IN, ...STEREO_OUT, DC]),
+  chorus: pedal('Chorus', 20, [p('rate', 0.1, 5, 0.8), p('depth', 0, 1, 0.5), mix(), sync()], [IN, ...STEREO_OUT, DC]),
+  flanger: pedal('Flanger', 20, [p('rate', 0.05, 5, 0.3), p('depth', 0, 1, 0.6), p('feedback', 0, 0.95, 0.5), mix(), sync()]),
+  phaser: pedal('Phaser', 15, [p('rate', 0.05, 5, 0.5), p('depth', 0, 1, 0.7), p('feedback', 0, 0.9, 0.3), choice('stages', ['4', '6', '8']), sync()]),
+  tremolo: pedal('Tremolo', 10, [p('rate', 0.5, 15, 5), p('depth', 0, 1, 0.5), choice('shape', ['sine', 'square']), sync()]),
+  delay: pedal('Delay', 100, [choice('model', ['Digital', 'Tape', 'Analog']), p('time', 20, 2000, 400), p('feedback', 0, 0.95, 0.35), knob('tone', 6), mix(0.35), choice('pingpong', ['off', 'on']), sync()], [IN, ...STEREO_OUT, DC]),
   reverb: pedal('Reverb', 150, [choice('model', ['Room', 'Hall', 'Plate', 'Spring'], 1), p('decay', 0.2, 10, 2.5), p('predelay', 0, 200, 20), knob('tone', 6), mix(0.3)],
     [jack('inL', 'in'), jack('inR', 'in', 'audio', 'inL'), ...STEREO_OUT, DC]),
   looper: pedal('Looper', 200, [p('level', 0, 1, 1)]),

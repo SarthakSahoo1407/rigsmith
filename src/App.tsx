@@ -11,7 +11,7 @@ import { download, failed, models, refresh as refreshLibrary, resolve, setKey, s
 import { GearDefs, type Live } from './gear';
 import { call, inApp, on, type Meter, type State } from './native';
 import { DEFAULT_PRESET, PRESETS, SETS } from './presets';
-import { commit, compile, history, parseRig, redo, toggle, undo, type History, type Rig } from './rig';
+import { commit, compile, history, parseRig, redo, setTempo, tempoOf, toggle, undo, type History, type Rig } from './rig';
 import type { SetScene } from './sets';
 
 type View = 'board' | 'grid' | 'live' | 'mixer';
@@ -76,6 +76,28 @@ function Tuner({ hz, input, onClose }: { hz: number; input: string; onClose: () 
         </div>
         <footer>Tuner</footer>
       </div>
+    </div>
+  );
+}
+
+// The rig's tempo: type it, nudge it, or tap it. Synced delays and modulation follow it.
+export function Tempo({ bpm, onChange }: { bpm: number; onChange: (bpm: number, group?: string) => void }) {
+  const taps = useRef<number[]>([]);
+  const [text, setText] = useState<string>();
+  const tap = () => {
+    const t = performance.now();
+    taps.current = [...taps.current.filter((x) => t - x < 2500), t].slice(-6);
+    if (taps.current.length < 2) return;
+    onChange(60000 / ((taps.current[taps.current.length - 1] - taps.current[0]) / (taps.current.length - 1)), 'tap');
+  };
+  const commit = () => { const v = Number(text); if (text !== undefined && v) onChange(v); setText(undefined); };
+  return (
+    <div className="tempo" role="group" aria-label="Tempo">
+      <input className="tempo-input" inputMode="numeric" aria-label="Tempo in BPM" value={text ?? String(bpm)} onFocus={(e) => e.target.select()}
+        onChange={(e) => setText(e.target.value.replace(/\D/g, '').slice(0, 3))} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setText(undefined); e.currentTarget.blur(); } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); onChange(bpm + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 5 : 1), 'tempo'); setText(undefined); } }} />
+      <span>BPM</span>
+      <button className="tempo-tap" onClick={tap} title="Tap the beat">Tap</button>
     </div>
   );
 }
@@ -379,6 +401,7 @@ export function App() {
         </div>
         <div className="spacer" />
         <div className="io">
+          <Tempo bpm={tempoOf(h.present)} onChange={(v, g) => edit((r) => setTempo(r, v), g)} />
           <button className={`tuner-button${tuning ? ' on' : ''}`} onClick={() => setTuner(!tuning)} title="Tuner (T)" aria-pressed={tuning}>Tune</button>
           <button className={`icon${inputMuted ? ' alert' : ''}`} onClick={muteInputs} title={inputMuted ? 'Unmute guitar input (I)' : 'Mute guitar input (I)'} aria-pressed={inputMuted} aria-label="Mute guitar input">
             {inputMuted ? <MicOff {...icon} /> : <Mic {...icon} />}

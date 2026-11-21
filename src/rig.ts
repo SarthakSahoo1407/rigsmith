@@ -1,7 +1,7 @@
 // The rig: what's on the board and how it's cabled. Pure functions, no audio.
 // The UI edits a Rig; compile() turns it into the node/wire list the native engine runs.
 
-import { CATALOG, def, type DeviceType, type JackKind } from './catalog';
+import { CATALOG, def, SYNC, type DeviceType, type JackKind } from './catalog';
 
 export type XY = { x: number; y: number };
 export type JackRef = { device: string; jack: string };
@@ -27,7 +27,7 @@ export type FileRef = {
   author?: string; authorUrl?: string; license?: string; toneId?: number | string; modelId?: number | string; toneUrl?: string; gear?: string;
 };
 // Scenes live in live sets (sets.ts), each holding a whole rig.
-export type Rig = { version: 1; devices: Record<string, Device>; cables: Cable[] };
+export type Rig = { version: 1; devices: Record<string, Device>; cables: Cable[]; tempo?: number }; // tempo in BPM, default 120
 
 // Knob values go as an array in catalog order; a placed mic adds its position and distance.
 export type Compiled = {
@@ -36,6 +36,22 @@ export type Compiled = {
 };
 
 export const emptyRig = (): Rig => ({ version: 1, devices: {}, cables: [] });
+
+export const DEFAULT_TEMPO = 120;
+export const tempoOf = (rig: Rig) => rig.tempo ?? DEFAULT_TEMPO;
+export const setTempo = (rig: Rig, bpm: number): Rig => (Number.isFinite(bpm) ? { ...rig, tempo: Math.max(40, Math.min(240, Math.round(bpm))) } : rig);
+
+// Knobs a note length drives: delay time (ms), modulation rate (Hz).
+const SYNCED: Partial<Record<DeviceType, 'time' | 'rate'>> = { delay: 'time', chorus: 'rate', flanger: 'rate', phaser: 'rate', tremolo: 'rate' };
+export const isSynced = (d: Device) => !!SYNCED[d.type] && d.params.sync > 0;
+// The value the synced knob takes at `bpm`, clamped to the knob's range.
+export function syncedValue(d: Device, bpm: number) {
+  const knob = SYNCED[d.type]!, beats = SYNC[d.params.sync][1];
+  const p = def(d.type).params.find((x) => x.name === knob)!;
+  const v = knob === 'time' ? (60000 / bpm) * beats : bpm / 60 / beats;
+  return Math.max(p.min, Math.min(p.max, v));
+}
+export const syncedKnob = (d: Device, name: string) => isSynced(d) && SYNCED[d.type] === name;
 
 const same = (a: JackRef, b: JackRef) => a.device === b.device && a.jack === b.jack;
 const key = (r: JackRef) => `${r.device}.${r.jack}`;
@@ -241,7 +257,7 @@ export function compile(rig: Rig): Compiled {
     out.wires.push({ from: a.node, out: a.index, to: b.node, in: b.index });
 
   for (const d of live) {
-    const params = def(d.type).params.map((p) => d.params[p.name]);
+    const params = def(d.type).params.map((p) => (isSynced(d) && syncedKnob(d, p.name) ? syncedValue(d, tempoOf(rig)) : d.params[p.name]));
     if (d.type === 'mic') params.push(d.mic?.x ?? 0, d.mic?.distance ?? 0);
     const files = d.files && Object.fromEntries(Object.entries(d.files).map(([slot, f]) => [slot, f.id]));
     const base = { params, on: d.on, ...(files && { files }) };
@@ -309,6 +325,7 @@ export function parseRig(text: string): Rig {
     const ref = (r: any): JackRef => ({ device: String(r?.device), jack: String(r?.jack) });
     rig = connect(rig, ref(c?.from), ref(c?.to));
   }
+  if (typeof raw.tempo === 'number') rig = setTempo(rig, raw.tempo);
   // Older rigs kept scenes inside: they open as their active scene.
   const scene = Array.isArray(raw.scenes?.list) ? raw.scenes.list[Math.trunc(num(raw.scenes.active))] : undefined;
   for (const [id, on] of Object.entries<any>(scene?.on ?? {})) if (rig.devices[id] && typeof on === 'boolean' && rig.devices[id].on !== on) rig = toggle(rig, id);

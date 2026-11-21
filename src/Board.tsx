@@ -24,7 +24,7 @@ import { spriteStyle, useSprite } from './render3d';
 import { cones, dropHints, micPlacementAt, gearSize, isPedal, layoutBoard, layoutGrid, MIC_HEAD, TILE, type Layout, type Zone } from './layout';
 import {
   addDevice, cableAt, canConnect, connect, disconnect, insertIntoCable, isPowered, moveDevice, placeMic, powerUp,
-  removeDevice, replaceDevice, setFile, setParam, toggle, type Device, type FileRef, type JackRef, type Rig, type XY,
+  removeDevice, replaceDevice, setFile, setParam, syncedKnob, toggle, type Device, type FileRef, type JackRef, type Rig, type XY,
 } from './rig';
 
 export type View = 'board' | 'grid';
@@ -274,7 +274,7 @@ function DeviceControls({ d }: { d: Device }) {
   const cabs = Object.values(rig.devices).filter((x) => x.type === 'cab');
   const props = { d, rig, edit, inputs, live };
   const amp = d.type === 'amp';
-  const generic = knobParams(d.type).filter((p) => !(d.type === 'input' && p.name === 'channel') && !(amp));
+  const generic = knobParams(d.type).filter((p) => !(d.type === 'input' && p.name === 'channel') && !(amp) && !syncedKnob(d, p.name));
   return (
     <>
       {plateParams(d.type).map((p) => (

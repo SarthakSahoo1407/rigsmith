@@ -15,7 +15,7 @@ import {
 import { spriteStyle, useSprite, type Model } from './render3d';
 import { call } from './native';
 import { Picker } from './Picker';
-import { isPowered, placeMic, setFile, setParam, toggle, type Device, type Rig } from './rig';
+import { isPowered, placeMic, setFile, setParam, syncedKnob, toggle, type Device, type Rig } from './rig';
 
 const maker = (d: Device) => makerOf(d.type, d.params);
 
@@ -188,7 +188,7 @@ function Fader({ p, value, onChange, text }: { p: Param; value: number; onChange
 }
 
 // Model pickers are nameplates, not knobs. A pedal whose models are separate pedals has none.
-const PLATES = new Set(['model', 'body', 'speaker']);
+const PLATES = new Set(['model', 'body', 'speaker', 'sync']);
 export const plateParams = (type: DeviceType) => def(type).params.filter((p) => PLATES.has(p.name) && p.name !== VARIANTS[type]?.param);
 export const knobParams = (type: DeviceType) => def(type).params.filter((p) => !PLATES.has(p.name));
 
@@ -197,13 +197,13 @@ export function ModelPlate({ d, edit, name }: Pick<Props, 'd' | 'edit'> & { name
   return (
     <select className="plate-select nodrag" aria-label={`${def(d.type).label} ${name}`} value={d.params[name]}
       onChange={(e) => edit((r) => setParam(r, d.id, name, Number(e.target.value)))}>
-      {p.options!.map((o, i) => <option key={o} value={i}>{o}</option>)}
+      {p.options!.map((o, i) => <option key={o} value={i}>{name === 'sync' ? (i ? `sync ${o}` : 'tempo: free') : o}</option>)}
     </select>
   );
 }
 
 const knobs = ({ d, edit }: Props, look: KnobStyle, only?: (p: Param) => boolean) =>
-  knobParams(d.type).filter((p) => !only || only(p)).map((p) => (
+  knobParams(d.type).filter((p) => (!only || only(p)) && !syncedKnob(d, p.name)).map((p) => ( // a synced time or rate follows the tempo
     <Knob key={p.name} p={p} look={look} value={d.params[p.name]} onChange={(v, g) => edit((r) => setParam(r, d.id, p.name, v), g)} />
   ));
 

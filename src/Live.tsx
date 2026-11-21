@@ -10,7 +10,7 @@ import { deviceName, useShot, type Edit, type Live as LiveData } from './gear';
 import { layoutGrid } from './layout';
 import { call } from './native';
 import { PRESETS, SETS } from './presets';
-import { isPowered, setParam, toggle, type Device, type Rig } from './rig';
+import { isPowered, setTempo, tempoOf, toggle, type Device, type Rig } from './rig';
 import { addToSet, changeScene, moveInSet, parseSets, removeFromSet, sameShape, sameSound, songsOf, type LiveSet, type SetScene } from './sets';
 
 const SETS_FILE = '_sets';
@@ -103,17 +103,14 @@ export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage,
   const pos = layoutGrid(rig);
   const stomps = Object.values(rig.devices).filter((d) => def(d.type).footswitch && d.type !== 'tuner' && pos[d.id])
     .sort((a, b) => pos[a.id].y - pos[b.id].y || pos[a.id].x - pos[b.id].x);
-  const delays = Object.values(rig.devices).filter((d) => d.type === 'delay');
   const taps = useRef<number[]>([]);
-  const [bpm, setBpm] = useState<number>();
-  // Tap tempo: the average of the last few taps sets every delay's time.
+  // Tap tempo: the average of the last few taps sets the rig's tempo; synced delays and modulation follow.
   const tap = () => {
     const t = performance.now();
     taps.current = [...taps.current.filter((x) => t - x < 2500), t].slice(-5);
     if (taps.current.length < 2) return;
     const ms = (taps.current[taps.current.length - 1] - taps.current[0]) / (taps.current.length - 1);
-    setBpm(Math.round(60000 / ms));
-    edit((r) => delays.reduce((acc, d) => setParam(acc, d.id, 'time', ms), r), 'tap');
+    edit((r) => setTempo(r, 60000 / ms), 'tap');
   };
   const changed = useMemo(() => scene && !sameSound(rig, scene.rig), [rig, scene]);
   // Which scenes load another rig (a short gap) rather than switching knobs and footswitches.
@@ -227,8 +224,8 @@ export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage,
 
         <footer className="live-foot">
           <button className="live-tool" onClick={onTune}>Tune</button>
-          <button className="live-tool" onClick={tap} disabled={!delays.length} title={delays.length ? 'Tap the beat to set every delay' : 'No delay in this rig'}>
-            Tap{bpm ? <b>{bpm} BPM</b> : null}
+          <button className="live-tool" onClick={tap} title="Tap the beat: sets the tempo that synced delays and modulation follow">
+            Tap<b>{tempoOf(rig)} BPM</b>
           </button>
           <div className="live-meters">
             <span>In</span><div className="meter"><i style={{ transform: `scaleX(${level(levels.in)})` }} /></div>
