@@ -16,7 +16,7 @@ import { Captures, DND_FILE } from './Captures';
 import { Picker } from './Picker';
 import type { Entry } from './library';
 import {
-  AMP_SWITCHES, AmpChannel, CaptureSelect, colorOf, credit, deviceName, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams,
+  AMP_SWITCHES, AmpChannel, CaptureSelect, colorOf, credit, deviceName, focusOnOpen, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams,
   readout, tapeName, Thumb, TunerScreen, useShot, type Edit, type Live,
 } from './gear';
 import { pedalboard } from './models';
@@ -410,7 +410,7 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
   const k = Math.min(1.9, 540 / size.w, 600 / size.h); // fill the preview, leaving room for the rendered sides
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label={tapeName(ctx.rig, d)}>
+      <div className="modal" role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label={tapeName(ctx.rig, d)}>
         <Head d={d} onClose={onClose} />
         <div className="modal-body">
           {d.type === 'cab' ? <CabStudio d={d} rig={ctx.rig} edit={ctx.edit} /> : (

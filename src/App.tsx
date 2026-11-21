@@ -9,7 +9,7 @@ import { Picker } from './Picker';
 import { LiveMode, type Stage } from './Live';
 import { Mixer } from './Mixer';
 import { download, failed, models, refresh as refreshLibrary, resolve, setKey, signIn, signOut, tone, useLibrary } from './library';
-import { GearDefs, type Live } from './gear';
+import { focusOnOpen, GearDefs, type Live } from './gear';
 import { call, inApp, on, type Meter, type State } from './native';
 import { DEFAULT_PRESET, PRESETS, SETS } from './presets';
 import { commit, compile, history, parseRig, redo, setTempo, tempoOf, toggle, undo, type History, type Rig } from './rig';
@@ -44,7 +44,7 @@ function Tuner({ hz, input, onClose }: { hz: number; input: string; onClose: () 
   const inTune = hz > 0 && Math.abs(cents) <= 3;
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`gb-tuner${inTune ? ' in-tune' : ''}`} role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Tuner">
+      <div className={`gb-tuner${inTune ? ' in-tune' : ''}`} role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label="Tuner">
         <header><button className="gb-close" aria-label="Close tuner" title="Close (T or Esc)" onClick={onClose} />{input}</header>
         <div className="gb-face">
           <svg viewBox="0 0 900 560" aria-hidden>
@@ -111,7 +111,7 @@ function Settings({ audio, onClose }: { audio: State; onClose: () => void }) {
   const latency = (audio.inputMs ?? 0) + (audio.outputMs ?? 0);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="settings" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Settings">
+      <div className="settings" role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label="Settings">
         <header className="inspector-head"><div className="inspector-title"><h2>Settings</h2></div>
           <button className="icon" aria-label="Close" onClick={onClose}><X size={16} strokeWidth={1.5} /></button></header>
         <section>
@@ -460,7 +460,7 @@ export function App() {
       {tuning && <Tuner hz={live.__tuner?.hz ?? 0} input={audio.inputs?.[inputs[0]?.params.channel ?? 0] ?? 'Input 1'} onClose={() => setTuner(false)} />}
       {help && (
         <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setHelp(false)}>
-          <div className="help" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Keyboard shortcuts">
+          <div className="help" role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label="Keyboard shortcuts">
             <header className="inspector-head"><div className="inspector-title"><h2>Keyboard shortcuts</h2></div>
               <button className="icon" aria-label="Close" onClick={() => setHelp(false)}><X {...icon} /></button></header>
             <dl>{KEYS.map(([k, what]) => <div key={k}><dt><kbd>{k}</kbd></dt><dd>{what}</dd></div>)}</dl>

@@ -19,6 +19,10 @@ import { isPowered, placeMic, setFile, setParam, syncedKnob, toggle, type Device
 
 const maker = (d: Device) => makerOf(d.type, d.params);
 
+// Focuses a dialog when it opens. One stable function, so React calls it only on mount: an inline
+// ref runs again on every render (the meters re-render ~30 times a second) and steals focus from inputs.
+export const focusOnOpen = (el: HTMLElement | null) => { if (el && !el.contains(document.activeElement)) el.focus(); };
+
 export type Edit = (change: (rig: Rig) => Rig, group?: string) => void;
 // Live readouts from the engine, by device id: tuner pitch, looper state, gate open/closed.
 export type Live = Record<string, { hz?: number; mode?: string; length?: number; position?: number; open?: boolean; missing?: boolean; wrongRate?: boolean }>;
