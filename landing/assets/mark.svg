@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="200 210 624 590">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c2c2f"/><stop offset="1" stop-color="#121214"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f3dc92"/><stop offset="1" stop-color="#b48c36"/></linearGradient>
+    <radialGradient id="knob" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#ffffff"/><stop offset=".4" stop-color="#d6d7db"/><stop offset=".75" stop-color="#8a8c91"/><stop offset="1" stop-color="#e2e3e6"/></radialGradient>
+    <pattern id="weave" width="14" height="14" patternUnits="userSpaceOnUse"><rect width="14" height="14" fill="#8f877a"/><rect width="7" height="7" fill="#2b2925"/><rect x="7" y="7" width="7" height="7" fill="#2b2925"/></pattern>
+    <pattern id="tolex" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#161616"/><circle cx="5" cy="5" r="1.4" fill="#262626"/></pattern>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  </defs>
+  <!-- handle -->
+  <rect x="412" y="226" width="200" height="34" rx="14" fill="#0c0c0d"/>
+  <!-- cabinet -->
+  <rect x="222" y="252" width="580" height="520" rx="36" fill="url(#tolex)" stroke="#060606" stroke-width="6"/>
+  <!-- control panel -->
+  <rect x="254" y="284" width="516" height="104" rx="10" fill="url(#gold)"/>
+  <g fill="url(#knob)" stroke="#555" stroke-width="2">
+    <circle cx="316" cy="336" r="26"/><circle cx="396" cy="336" r="26"/><circle cx="476" cy="336" r="26"/><circle cx="556" cy="336" r="26"/><circle cx="636" cy="336" r="26"/>
+  </g>
+  <g stroke="#1a1a1a" stroke-width="5" stroke-linecap="round">
+    <line x1="316" y1="336" x2="300" y2="318"/><line x1="396" y1="336" x2="396" y2="313"/><line x1="476" y1="336" x2="494" y2="318"/><line x1="556" y1="336" x2="540" y2="318"/><line x1="636" y1="336" x2="656" y2="324"/>
+  </g>
+  <circle cx="722" cy="336" r="18" fill="#e8a33d" stroke="#2a2a2a" stroke-width="5"/>
+  <!-- grille with piping -->
+  <rect x="254" y="410" width="516" height="330" rx="12" fill="url(#weave)" stroke="#ebe6d4" stroke-width="6"/>
+  <rect x="254" y="410" width="516" height="330" rx="12" fill="#000" fill-opacity=".12"/>
+  <!-- nameplate -->
+  <rect x="412" y="458" width="200" height="56" rx="8" fill="#0d0d0d" stroke="#c9a84e" stroke-width="4"/>
+  <path d="M 440 494 C 470 466 492 500 512 480 C 532 462 556 498 584 476" stroke="#ecd9a3" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <!-- corners -->
+  <g fill="#d0d0d3"><rect x="222" y="252" width="44" height="44" rx="14"/><rect x="758" y="252" width="44" height="44" rx="14"/><rect x="222" y="728" width="44" height="44" rx="14"/><rect x="758" y="728" width="44" height="44" rx="14"/></g>
+</svg>

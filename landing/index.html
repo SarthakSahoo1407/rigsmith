@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d0d">
+  <meta name="description" content="Rigsmith is a guitar rig simulator for Mac. Wire pedals, amps and cabs, load Neural Amp Modeler captures, and take your sounds onstage.">
+  <title>Rigsmith — Your whole guitar rig on Mac</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body id="top">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <symbol id="down" viewBox="0 0 24 24"><path d="M12 5v14m0 0 6-6m-6 6-6-6"/></symbol>
+    <symbol id="star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.5 6 .9-4.4 4.2 1 6-5.3-2.8-5.3 2.8 1-6L3.3 9.4l6-.9z"/></symbol>
+  </defs></svg>
+  <header class="site-header">
+    <nav class="shell nav" aria-label="Main">
+      <a class="brand" href="#top"><img src="assets/mark.svg" alt="" width="28" height="28">Rigsmith</a>
+      <div class="nav-links">
+        <a href="#board">Explore</a>
+        <a href="#contribute">Contribute</a>
+        <a class="button small" href="#download">Get Rigsmith <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="shell hero-layout">
+        <div class="hero-copy">
+          <p class="label"><span class="led"></span> Guitar rig simulator for Mac</p>
+          <h1 id="hero-title">Build your whole guitar rig, wire by wire</h1>
+          <p class="lede">Patch together amps, pedals and cabs. Play through your rig live or load it in your DAW.</p>
+          <div class="actions">
+            <a class="button" href="#download">Download for Mac <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+            <a class="text-link" href="#board">See how it works <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+          </div>
+          <p class="formats">Standalone <span>·</span> AU <span>·</span> VST3</p>
+        </div>
+        <figure class="hero-visual">
+          <div class="window">
+            <img src="assets/board.webp" width="2400" height="1367" alt="The Rigsmith Board with a wired chain of 3D stompboxes, an amplifier and a speaker cabinet" fetchpriority="high">
+          </div>
+          <figcaption><span>Rigsmith / Board</span><span>Shred lead preset</span></figcaption>
+        </figure>
+      </div>
+      <nav class="shell signal-path" aria-label="Explore Rigsmith views">
+        <a href="#board"><span class="led"></span>Board <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+        <a href="#grid"><span class="led"></span>Grid <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+        <a href="#mixer"><span class="led"></span>Mixer <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+        <a href="#live"><span class="led"></span>Live <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+      </nav>
+    </section>
+
+    <section class="chapter board" id="board" aria-labelledby="board-title">
+      <div class="chapter-stage shell">
+        <div class="chapter-copy">
+          <p class="label"><span class="led"></span> Board</p>
+          <h2 id="board-title">Every cable matters</h2>
+          <p>Drag cables between real jacks, run two amps in parallel, and patch delay or reverb into an amp’s effects loop. Plug your pedals into power to bring them to life.</p>
+          <p class="formats">30 pedals <span>·</span> 9 amps <span>·</span> 4 cabs</p>
+        </div>
+        <figure class="chapter-frame">
+          <img class="chapter-image" src="assets/board-detail.webp" width="1400" height="800" alt="A close-up of Rigsmith’s rendered pedalboard and connected patch cables" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section class="chapter grid" id="grid" aria-labelledby="grid-title">
+      <div class="chapter-stage shell">
+        <div class="chapter-copy">
+          <p class="label"><span class="led"></span> Grid</p>
+          <h2 id="grid-title">Read the whole signal chain</h2>
+          <p>See the chain in signal order and jump to any block. Drop in a Neural Amp Modeler capture alongside your pedals or browse captures and impulse responses from TONE3000.</p>
+        </div>
+        <figure class="chapter-frame">
+          <img class="chapter-image" src="assets/grid.webp" width="2400" height="1367" alt="Rigsmith’s Grid view with the effects, amp and cab arranged in signal order" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section class="chapter mixer" id="mixer" aria-labelledby="mixer-title">
+      <div class="chapter-stage shell">
+        <div class="chapter-copy">
+          <p class="label"><span class="led"></span> Mixer</p>
+          <h2 id="mixer-title">Find the right balance</h2>
+          <p>Balance your rig on channel strips. In the cab studio, drag up to four mics across the speaker, or blend two impulse responses to shape the cabinet sound.</p>
+        </div>
+        <figure class="chapter-frame">
+          <img class="chapter-image" src="assets/mixer.webp" width="2400" height="1367" alt="Rigsmith’s Mixer view with channel strips for adjusting levels and pan" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section class="chapter live" id="live" aria-labelledby="live-title">
+      <div class="chapter-stage shell">
+        <div class="chapter-copy">
+          <p class="label"><span class="led"></span> Live</p>
+          <h2 id="live-title">Keep the set moving</h2>
+          <p>Organize your sounds into songs and scenes. Keep the current sound, the next cue, your tuner and tap tempo in sight while you play.</p>
+        </div>
+        <figure class="chapter-frame">
+          <img class="chapter-image" src="assets/live.webp" width="2400" height="1367" alt="Rigsmith Live view showing the setlist, current and upcoming scenes, and pedals" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section class="get shell" id="download" aria-labelledby="download-title">
+      <img src="assets/mark.svg" width="76" height="76" alt="">
+      <h2 id="download-title">Plug in and play</h2>
+      <p>Open Rigsmith on your Mac, connect your guitar through an audio interface, and start with a preset or build a rig from scratch.</p>
+      <a class="button" href="assets/Rigsmith-macOS-arm64.zip" download>Download for Apple silicon <svg class="i" aria-hidden="true"><use href="#down"/></svg></a>
+      <p class="download-note">macOS · Standalone app ZIP · Preview build</p>
+    </section>
+  </main>
+
+  <footer class="site-footer" id="contribute">
+    <div class="shell footer">
+      <div>
+        <h2>Help shape Rigsmith</h2>
+        <p>Share a rig, report a bug, or help improve a model when the GitHub repository opens.</p>
+      </div>
+      <div class="footer-actions">
+        <span class="button secondary" aria-disabled="true"><svg class="i" aria-hidden="true"><use href="#star"/></svg> Star on GitHub</span>
+        <span class="download-note">Repository pending</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
