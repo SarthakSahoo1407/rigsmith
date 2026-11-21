@@ -50,7 +50,7 @@ static Rendered run (rig::Engine& e, int blocks = 40)
 
 static var rigJson (const char* text) { return JSON::parse (String (text)); }
 
-static bool near (float a, float b, float tol = 0.005f) { return std::abs (a - b) < tol; }
+static bool closeTo (float a, float b, float tol = 0.005f) { return std::abs (a - b) < tol; }
 
 
 // Renders one node directly over `in` (one vector per input jack) and returns its outputs.
@@ -109,15 +109,15 @@ static void checkDevices()
         int at = 1;
         for (int i = 1; i < (int) out[0].size(); ++i) if (std::abs (out[0][(size_t) i]) > std::abs (out[0][(size_t) at])) at = i;
         CHECK (std::abs (at - second / 10) <= 1);
-        CHECK (near (out[1][(size_t) at], out[0][(size_t) at], 1e-7f)); // plain delay: same echo on both sides
+        CHECK (closeTo (out[1][(size_t) at], out[0][(size_t) at], 1e-7f)); // plain delay: same echo on both sides
     }
     { // IR designer: a flat curve is a single click; -20 dB is a click a tenth as loud.
         auto flat = rig::designIr (SR, 1024, { { 100, 0 }, { 1000, 0 } });
         auto quiet = rig::designIr (SR, 1024, { { 100, -20 }, { 1000, -20 } });
         float tail = 0;
         for (int i = 1; i < 1024; ++i) tail += std::abs (flat.getSample (0, i));
-        CHECK (near (flat.getSample (0, 0), 1.0f, 0.01f) && tail < 0.01f);
-        CHECK (near (quiet.getSample (0, 0), 0.1f, 0.005f));
+        CHECK (closeTo (flat.getSample (0, 0), 1.0f, 0.01f) && tail < 0.01f);
+        CHECK (closeTo (quiet.getSample (0, 0), 0.1f, 0.005f));
     }
     { // Cab: a 4x12 with aggressive speakers passes the upper mids and cuts the fizz above 6 kHz.
         auto level = [&] (float hz) {
@@ -149,7 +149,7 @@ static void checkDevices()
         none->configure();
         CHECK (static_cast<rig::Nam&> (*none).missing);
         const auto in = sine (220, 0.2f, N * 4);
-        CHECK (near (rms (renderNode (*none, { in })[0]), rms (in), 1e-4f));
+        CHECK (closeTo (rms (renderNode (*none, { in })[0]), rms (in), 1e-4f));
     }
     { // Cab IR slots: a real IR file in slot A replaces the modelled cab; low cut removes lows.
         const auto file = File::getSpecialLocation (File::tempDirectory).getChildFile ("rigcheck-ir.wav");
@@ -196,13 +196,13 @@ static void checkDevices()
         auto mix = make ("cab/mix", { 1, -1, 1, 0, 0, 0, 0, 0 });
         const auto a = sine (440, 0.1f, N * 8), b = sine (440, 0.0f, N * 8);
         auto out = renderNode (*mix, { a, b, b, b });
-        CHECK (near (rms (out[0]), rms (a), 1e-4f) && rms (out[1]) < 1e-6f);
+        CHECK (closeTo (rms (out[0]), rms (a), 1e-4f) && rms (out[1]) < 1e-6f);
     }
     { // Gate: shuts out hiss below the threshold, passes playing above it.
         auto g = make ("gate", { -50, 50 });
         CHECK (rms (renderNode (*g, { sine (440, 0.0005f, second) })[0], second / 2) < 1e-5f);
         const auto loud = sine (440, 0.1f, second);
-        CHECK (near (rms (renderNode (*g, { loud })[0], second / 2), rms (loud, second / 2), 0.002f));
+        CHECK (closeTo (rms (renderNode (*g, { loud })[0], second / 2), rms (loud, second / 2), 0.002f));
     }
     { // Compressor: a hot signal 26 dB over the threshold comes out much quieter.
         auto c = make ("compressor", { -20, 10, 1, 50, 0 });
@@ -216,14 +216,14 @@ static void checkDevices()
             auto out = renderNode (*t, { sine (hz, 0.2f, second / 2) });
             CHECK (rms (out[0]) == 0.0f);
             const float heard = dynamic_cast<rig::Tuner&> (*t).detect();
-            if (! near (heard, hz, hz * 0.003f)) std::printf ("  tuner heard %.2f for %.2f\n", heard, hz);
-            CHECK (near (heard, hz, hz * 0.003f));
+            if (! closeTo (heard, hz, hz * 0.003f)) std::printf ("  tuner heard %.2f for %.2f\n", heard, hz);
+            CHECK (closeTo (heard, hz, hz * 0.003f));
         }
     }
     { // Volume pedal: heel down is silent, toe down is unity.
         const auto in = sine (440, 0.2f, second / 4);
         CHECK (rms (renderNode (*make ("volume", { 0 }), { in })[0], second / 8) < 1e-6f);
-        CHECK (near (rms (renderNode (*make ("volume", { 1 }), { in })[0], second / 8), rms (in, second / 8), 1e-4f));
+        CHECK (closeTo (rms (renderNode (*make ("volume", { 1 }), { in })[0], second / 8), rms (in, second / 8), 1e-4f));
     }
     { // Reverb: keeps ringing after the input stops.
         auto r = make ("reverb", { 1, 3, 20, 6, 0.5f });
@@ -242,7 +242,7 @@ static void checkDevices()
         CHECK (play[0] == ramp);
         l.command = rig::Looper::Main; renderNode (l, { ones });            // overdub one pass
         l.command = rig::Looper::Main; auto dub = renderNode (l, { zeros });
-        CHECK (near (dub[0][500], ramp[500] + 0.5f, 1e-6f));
+        CHECK (closeTo (dub[0][500], ramp[500] + 0.5f, 1e-6f));
         l.command = rig::Looper::Undo; renderNode (l, { zeros });
         auto undone = renderNode (l, { zeros });
         CHECK (undone[0] == ramp);
@@ -258,8 +258,8 @@ static void checkDevices()
             if ((a < 0) != (b < 0)) ++crossings;
         }
         const float hz = (float) crossings / 2.0f / 0.5f;
-        if (! near (hz, 440, 25)) std::printf ("  pitch shift heard %.1f Hz\n", hz);
-        CHECK (near (hz, 440, 25));
+        if (! closeTo (hz, 440, 25)) std::printf ("  pitch shift heard %.1f Hz\n", hz);
+        CHECK (closeTo (hz, 440, 25));
     }
     // Every model of every multi-model effect stays finite and audible.
     for (int m = 0; m < 4; ++m)
@@ -300,8 +300,8 @@ int main()
         hp.set (rig::Biquad::HighPass, SR, 1000);
         float a = 0, b = 0;
         for (int i = 0; i < 4000; ++i) { a = lp (1.0f); b = hp (1.0f); }
-        CHECK (near (a, 1.0f, 1e-3f));
-        CHECK (near (b, 0.0f, 1e-3f));
+        CHECK (closeTo (a, 1.0f, 1e-3f));
+        CHECK (closeTo (b, 0.0f, 1e-3f));
     }
 
     rig::Engine e;
@@ -312,7 +312,7 @@ int main()
     e.setRig (rigJson (R"({"nodes":[{"id":"i","type":"input","params":[0,0],"on":true},{"id":"o","type":"output","params":[1],"on":true}],
         "wires":[{"from":"i","out":0,"to":"o","in":0},{"from":"i","out":0,"to":"o","in":1}]})"));
     auto r = run (e);
-    CHECK (near (r.l, r.in) && near (r.r, r.in));
+    CHECK (closeTo (r.l, r.in) && closeTo (r.r, r.in));
     CHECK (r.diff < 1e-3f);
 
     // Nothing cabled: silence.
@@ -329,7 +329,7 @@ int main()
     std::snprintf (buf, sizeof buf, parallel, 0);
     e.setRig (rigJson (buf));
     r = run (e);
-    CHECK (near (r.l, 2 * r.in));
+    CHECK (closeTo (r.l, 2 * r.in));
     CHECK (r.r == 0.0f); // nothing in R
     std::snprintf (buf, sizeof buf, parallel, 1);
     e.setRig (rigJson (buf));
@@ -353,7 +353,7 @@ int main()
     // Standalone tuner: hears the 440 Hz input with no tuner in the rig, and mutes the output.
     e.tuning = true;
     r = run (e, 200);
-    CHECK (near (e.tuner.detect(), 440.0f, 2.0f) && r.l < 1e-4f);
+    CHECK (closeTo (e.tuner.detect(), 440.0f, 2.0f) && r.l < 1e-4f);
     e.tuning = false;
 
     // Full amp chain renders something sane in every amp model, cab size and speaker.
