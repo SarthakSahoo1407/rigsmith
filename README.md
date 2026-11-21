@@ -166,3 +166,7 @@ cmake --build native/build --config Release
 - Rigs, captures and settings live in `%APPDATA%\Rigsmith`. `.rigsmith` files open on both systems.
 - Audio uses WASAPI, which works with any interface but has more latency than a Mac. For low latency use your interface's ASIO driver: download Steinberg's ASIO SDK, and configure with `-DRIG_ASIO_SDK=<folder>` (the SDK's licence doesn't let us ship it).
 - `.github/workflows/build.yml` builds both platforms and makes the installers. Pushing a tag such as `v1.0.0` publishes them as a release. `installer/windows/Rigsmith.iss` (Inno Setup) and `installer/macos/build-pkg.sh` define them.
+
+## License
+
+Rigsmith is free software under the [GNU AGPL v3](LICENSE), which is also the open-source license of JUCE, the audio framework it is built on. It also uses the Neural Amp Modeler core (MIT), Eigen (MPL 2.0), React and React Flow (MIT), three.js (MIT), lucide icons (ISC) and Geist and other fonts (SIL OFL). Neural Amp Modeler captures and impulse responses are not part of the project: they are downloaded from TONE3000 on request, under each creator's own license.
