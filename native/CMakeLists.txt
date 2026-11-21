@@ -6,6 +6,19 @@ include(FetchContent)
 FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.15 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# Windows draws the UI with Edge WebView2, which JUCE links statically from Microsoft's NuGet package.
+# Fetch it here so a plain `cmake` works without installing NuGet first. Skipped when
+# JUCE_WEBVIEW2_PACKAGE_LOCATION already points at a copy.
+if(WIN32 AND NOT JUCE_WEBVIEW2_PACKAGE_LOCATION)
+  FetchContent_Declare(webview2
+    URL https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.3485.44
+    DOWNLOAD_NAME Microsoft.Web.WebView2.zip
+    SOURCE_DIR ${CMAKE_BINARY_DIR}/webview2/Microsoft.Web.WebView2
+    SOURCE_SUBDIR none)
+  FetchContent_MakeAvailable(webview2)
+  set(JUCE_WEBVIEW2_PACKAGE_LOCATION ${CMAKE_BINARY_DIR}/webview2 CACHE PATH "WebView2 NuGet package folder" FORCE)
+endif()
+
 # Neural Amp Modeler core (MIT) and Eigen (MPL2, header-only), compiled once into `nam`.
 # SOURCE_SUBDIR points nowhere so their own CMake projects (tests, tools) aren't built.
 FetchContent_Declare(namcore GIT_REPOSITORY https://github.com/sdatkinson/NeuralAmpModelerCore.git
