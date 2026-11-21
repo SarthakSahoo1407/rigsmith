@@ -14,8 +14,8 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 | Branding | Fictional makers, never real ones. Each amp model has its own maker and look (Fairmont, Sutter, Wexford, Kingsway, Thornbury, Ironside, Vexor, Calloway, Moreau: tolex or tweed, grille cloth, nameplate, top or bottom panel, knob finish); each cab speaker type too (Kingsway, Ironside, Wexford, Fairmont). Pedals Kestrel, mics Oriel, power Voltline, interface and DI Arcadia Audio, routing Patchwell; the board is a Rigsmith Touring 32. Amps and cabs are separate items in the gear list, like the pedals. |
 | Pedals | Each pedal has the enclosure it's modelled on (`layout.ts shapeOf`): compact with a hinged plate, MXR-style stomp, wide, round fuzz, TS-style rocker, hammertone; chrome, cream, black or chicken-head knobs and its own typeface. Pedals that are several pedals in real life (drive, fuzz, boost, delay, reverb) are separate items; the model stays a knob value. |
 | Mics | A mic on a cab is drawn from behind on the cab's face, its head over a cone. Drag it across the cone to set position (centre bright, edge dark), scroll over it for distance. |
-| Power | On/off only. Unpowered pedal = silent. Amps (and NAM heads) have a power switch; off = silent. Devices store volts/mA but nothing checks them yet. |
-| UI | One rig, two views with a toggle. **Board**: a stage at soundcheck with auto zones (`src/layout.ts`): amp heads stacked on their cabs with mics in front on the stage, pedals in slots on a pedalboard (signal right to left, wrapping rows, power bricks on the rail), interface on a desk, guitar input beside the board. Drag reorders within a zone; nothing floats. The stage sits above the boards on a tall window and beside them on a wide one, whichever fills the canvas more (`layoutFor`). **Grid**: free-form boxes. Built on React Flow (`@xyflow/react`). Graphite chrome, one amber accent, gaffer-tape name labels. |
+| Power | On/off only. Unpowered pedal = silent. Devices store volts/mA but nothing checks them yet. |
+| UI | One rig, two views with a toggle. **Board**: a stage at soundcheck with auto zones (`src/layout.ts`): amp heads stacked on their cabs with mics in front on the stage, pedals in slots on a pedalboard (signal right to left, wrapping rows, power bricks on the rail), interface on a desk, guitar input beside the board. Drag reorders within a zone; nothing floats. **Grid**: free-form boxes. Built on React Flow (`@xyflow/react`). Graphite chrome, one amber accent, gaffer-tape name labels. |
 | Grid | Quad Cortex-style: equal tiles laid out by signal flow (columns) and branches (rows), routed cables, power gear hidden. The right panel shows the rig overview (levels, warnings, power all, the signal path with on/off per block) or the selected tile's controls. |
 | Stereo | Two mics on one cab blend to the centre through a joiner. Two amps on a splitter pan left and right, level-matched. |
 | Stereo | Every cable is mono. Stereo gear has separate L/R jacks. A mono signal into only Output L plays on both sides. |
@@ -23,7 +23,7 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 | Footswitches | Click the plate, or keys 1–9 stomp pedals in signal order. |
 | Keys | ←/→ presets, V view, T tuner, M mute output, I mute input, B bypass, P power, Enter open, ⌫ delete, \\ gear list, ⌘Z/⇧⌘Z, ⌘S, ⌘O/⌘E, ? list. |
 | Gear list | Left sidebar, collapsible: thumbnails of the real gear. Click to add, drag onto the rig, or drop onto a cable to insert it there. Double-click any device for a large window with every control, Replace (same kind of gear) and Delete. |
-| Tuner | A tuner pedal in the chain, plus a standalone tuner (top bar, T) that listens to the input directly: an arc from −50 to +50 cents with a needle that glides (eased every frame), the note big, Hz and cents either side. Green within ±3 cents, yellow ±10, orange ±25, red beyond. Both have a reference pitch (A4 430–450 Hz) and mute or bypass while tuning. |
+| Tuner | A tuner pedal in the chain, plus a standalone tuner (top bar, T) that listens to the input directly and mutes the output while open: an arc from −50 to +50 cents with an orange needle, the note big, Hz and cents either side. |
 | Mute | Master output mute (top bar, M) and an input mute on each DI box (I mutes all). |
 | Meters | Input and output peak meters, clip light, latency, audio CPU and app RAM. |
 | Wah / volume | On-screen treadle (drag or scroll wheel). |
@@ -40,7 +40,7 @@ A desktop guitar rig (macOS) you build like a real one: place any number of peda
 5. A hidden, non-removable limiter sits on the final output.
 6. **Amp effects loop is normalled like a real amp:** with nothing in Return, the signal passes through the amp internally. A cable in Return breaks the internal path and feeds the power amp. A cable in Send alone is just a copy (tap) of the preamp signal.
 7. An amp with nothing on its speaker out is silent ("no load" warning).
-8. **Mics are placed, not cabled.** Drag a mic onto a cab's speaker; position (center brighter, edge darker) and distance (closer = more bass, further = quieter + small delay) are two knobs on the placed mic. Dragging a mic off its cab detaches it. Several mics per cab are allowed. The mic's XLR output jack goes to the Output device. A cab without a mic is silent, unless its Direct jack (the speaker with no mic) is cabled to the Output.
+8. **Mics are placed, not cabled.** Drag a mic onto a cab's speaker; position (center brighter, edge darker) and distance (closer = more bass, further = quieter + small delay) are two knobs on the placed mic. Dragging a mic off its cab detaches it. Several mics per cab are allowed. The mic's XLR output jack goes to the Output device. A cab without a mic is silent.
 9. Any audio output may go straight to the Output (DI / amp-less path).
 10. No limit on device count. The ceiling is CPU; an audio glitch shows a warning.
 
@@ -187,5 +187,3 @@ src/Live.tsx        Live mode: setlist, stage, add-a-scene picker
 - Windows build
 - Looper WAV export, multi-track, tempo sync
 - Bundled IR packs: only with a license that allows redistribution (none found yet; TONE3000 IRs download on request)
-
-

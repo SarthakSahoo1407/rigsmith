@@ -43,7 +43,6 @@ export const AMP_MODELS = ['US Clean', 'Tweed', 'UK Chime', 'UK Plexi', 'UK Lead
 export const CATALOG = {
   input: { label: 'Guitar Input', jacks: [OUT], params: [p('channel', 0, 63, 0), p('trim', -24, 24, 0)] },
   output: { label: 'Output', jacks: [jack('L', 'in'), jack('R', 'in', 'audio', 'L')], params: [p('volume', 0, 1, 0.5)] },
-  board: { label: 'Pedalboard', jacks: [], params: [choice('size', ['compact', 'touring', 'large', 'stage'], 1), choice('finish', ['black', 'silver', 'walnut'])] },
   power: { label: 'Power Supply', jacks: Array.from({ length: 8 }, (_, i) => jack(String(i + 1), 'out', 'power')), params: [] },
   splitter: { label: 'Splitter', jacks: [IN, jack('outA', 'out'), jack('outB', 'out')], params: [] },
   joiner: {
@@ -52,7 +51,7 @@ export const CATALOG = {
     params: [p('levelA', 0, 1, 1), p('levelB', 0, 1, 1), choice('phaseB', ['normal', 'flipped'])],
   },
 
-  tuner: { ...pedal('Tuner', 50, [p('reference', 430, 450, 440), choice('mode', ['mute', 'bypass'])]), startsOff: true },
+  tuner: { ...pedal('Tuner', 50, [p('reference', 430, 450, 440)]), startsOff: true },
   gate: pedal('Noise Gate', 10, [p('threshold', -80, -10, -45), p('release', 10, 500, 80)]),
   compressor: pedal('Compressor', 10, [p('threshold', -60, 0, -20), p('ratio', 1, 20, 4), p('attack', 0.1, 100, 5), p('release', 10, 1000, 100), p('makeup', 0, 24, 0)]),
   boost: pedal('Boost', 10, [choice('model', ['clean', 'treble', 'mid']), p('gain', 0, 24, 6), knob('tone')]),
@@ -87,17 +86,16 @@ export const CATALOG = {
     ],
     parts: [{ suffix: 'pre', ins: ['in'], outs: ['send'] }, { suffix: 'power', ins: ['return'], outs: ['speaker'] }],
   },
-  // A cab: mics on it pick it up. Its L/R outputs are the mic mixer's stereo bus (MicMix in the engine);
-  // Direct is the speaker itself with no mic, like a load box's line out with a cab IR.
+  // A cab: mics on it pick it up. Its L/R outputs are the mic mixer's stereo bus (MicMix in the engine).
   // Source IR plays the IR files in its slots (Device.files irA / irB) instead of the modelled speaker.
   cab: {
     label: 'Cab',
-    jacks: [jack('in', 'in', 'speaker'), jack('outL', 'out'), jack('outR', 'out'), jack('direct', 'out')],
+    jacks: [jack('in', 'in', 'speaker'), jack('outL', 'out'), jack('outR', 'out')],
     params: [
       choice('size', ['1x12', '2x12', '4x12'], 1), choice('speaker', ['warm 25W', 'aggressive 60W', 'chimey alnico', 'sparkly US']),
       choice('source', ['modelled', 'IR']), p('blend', 0, 1, 0.5), p('lowCut', 20, 300, 20), p('highCut', 3000, 20000, 20000),
     ],
-    parts: [{ suffix: 'spk', ins: ['in'], outs: ['direct'] }, { suffix: 'mix', ins: [], outs: ['outL', 'outR'] }],
+    parts: [{ suffix: 'spk', ins: ['in'], outs: [] }, { suffix: 'mix', ins: [], outs: ['outL', 'outR'] }],
   },
   // A mic's controls are its mixer channel; position and distance live on Device.mic.
   mic: {
@@ -123,7 +121,7 @@ export const AMP_MAKERS = ['Fairmont', 'Sutter', 'Wexford', 'Kingsway', 'Thornbu
 export const CAB_MAKERS = ['Kingsway', 'Ironside', 'Wexford', 'Fairmont'];
 const MAKERS: Partial<Record<DeviceType, string>> = {
   namAmp: 'NAM capture', namRig: 'NAM capture', namPedal: 'NAM capture',
-  mic: 'Oriel', board: 'Trailhead', power: 'Voltline', input: 'Arcadia Audio', output: 'Arcadia Audio', splitter: 'Patchwell', joiner: 'Patchwell',
+  mic: 'Oriel', power: 'Voltline', input: 'Arcadia Audio', output: 'Arcadia Audio', splitter: 'Patchwell', joiner: 'Patchwell',
 };
 export const makerOf = (type: DeviceType, params: Record<string, number> = {}) =>
   type === 'amp' ? AMP_MAKERS[params.model ?? 0] ?? AMP_MAKERS[0]
@@ -139,7 +137,6 @@ export const VARIANTS: Partial<Record<DeviceType, { param: string; names: string
   delay: { param: 'model', names: ['Digital Delay', 'Tape Echo', 'Analog Delay'] },
   reverb: { param: 'model', names: ['Room Reverb', 'Hall Reverb', 'Plate Reverb', 'Spring Reverb'] },
   amp: { param: 'model', names: AMP_MODELS },
-  board: { param: 'size', names: ['Compact 20 board', 'Touring 32 board', 'Touring 40 board', 'Stage 52 board'] },
   cab: { param: 'speaker', names: ['Warm 25W cab', 'Aggressive 60W cab', 'Chimey alnico cab', 'Sparkly US cab'] },
 };
 export const variantOf = (type: DeviceType, params: Record<string, number>) => {
@@ -163,11 +160,4 @@ export const itemParams = (i: Item): Record<string, number> => (i.variant === un
 export const AMP_CHANNEL_KNOBS = ['gain', 'bass', 'mid', 'treble'];
 export const ampKnob = (name: string, channel: number) =>
   !AMP_CHANNEL_KNOBS.includes(name) || channel === 1 ? name : `${channel === 0 ? 'clean' : 'lead'}${name[0].toUpperCase()}${name.slice(1)}`;
-// A capture's name without the tone title said twice: TONE3000 model names often repeat it
-// ("TS9 · TS9 Drive 0 Tone 7"), which older downloads kept.
-export const captureName = (name: string) => {
-  const [title, model] = name.split(' · ');
-  return model && model.toLowerCase().startsWith(title.toLowerCase()) ? model : name;
-};
-
 export const isNam = (type: DeviceType) => type === 'namAmp' || type === 'namRig' || type === 'namPedal';

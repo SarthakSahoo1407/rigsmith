@@ -1,22 +1,22 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Trash2, Undo2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { Board, type Edit } from './Board';
-import { PresetPicker } from './PresetPicker';
 import { LiveMode, type Stage } from './Live';
 import { download, failed, models, refresh as refreshLibrary, resolve, setKey, signIn, signOut, tone, useLibrary } from './library';
-import { focusOnOpen, GearDefs, pitchOf, tuneColor, useSmoothed, type Live } from './gear';
-import { call, cpuText, inApp, on, type Meter, type State } from './native';
-import { DEFAULT_PRESET, PRESET_CAPTURES, PRESETS, SETS } from './presets';
-import { commit, compile, history, parseRig, redo, toggle, undo, type FileRef, type History, type Rig } from './rig';
+import { GearDefs, type Live } from './gear';
+import { call, inApp, on, type Meter, type State } from './native';
+import { DEFAULT_PRESET, PRESETS, SETS } from './presets';
+import { commit, compile, history, parseRig, redo, toggle, undo, type History, type Rig } from './rig';
 import type { SetScene } from './sets';
 
 type View = 'board' | 'grid' | 'live';
 
 const AUTOSAVE = '_autosave';
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const toLevel = (peak: number) => Math.max(0, Math.min(1, (20 * Math.log10(peak || 1e-6) + 60) / 60));
 
 const KEYS: [string, string][] = [
@@ -26,49 +26,41 @@ const KEYS: [string, string][] = [
   ['\\', 'Show or hide the gear list'], ['⌘Z  ⇧⌘Z', 'Undo / redo'], ['⌘S', 'Save preset'], ['⌘O  ⌘E', 'Open / export a .rigsmith file'], ['?', 'This list'],
 ];
 
-// The standalone tuner, styled after a studio app's: an arc from -50 to +50 cents, a needle that glides
-// to the pitch, the note big, Hz and cents either side. Colour says how close: green in tune, then
-// yellow, orange, red. Reference pitch (A4) and mute or bypass while tuning are set at the bottom.
+// The standalone tuner, styled after a studio app's: an arc from -50 to +50 cents, an orange needle
+// with the gap to centre shaded, the note big, Hz and cents either side. The output is muted while open.
 const PIVOT = { x: 450, y: 470 };
 const polar = (r: number, deg: number) => ({ x: PIVOT.x + r * Math.sin((deg * Math.PI) / 180), y: PIVOT.y - r * Math.cos((deg * Math.PI) / 180) });
 const arc = (r: number, from: number, to: number) => {
   const [a, b] = [polar(r, from), polar(r, to)];
   return `M ${a.x} ${a.y} A ${r} ${r} 0 0 ${to > from ? 1 : 0} ${b.x} ${b.y}`;
 };
-const TUNE_COLORS = { green: '#3ecf6e', yellow: '#e6c23a', orange: '#f08a24', red: '#e5484d' };
-type TunerPrefs = { reference: number; mute: boolean };
-function Tuner({ hz, input, prefs, setPrefs, onClose }: { hz: number; input: string; prefs: TunerPrefs; setPrefs: (p: TunerPrefs) => void; onClose: () => void }) {
-  const pitch = pitchOf(hz, prefs.reference);
-  const cents = pitch ? Math.round(pitch.cents) : 0;
-  const angle = useSmoothed(pitch ? Math.max(-50, Math.min(50, pitch.cents)) * 1.2 : 0);
-  const color = TUNE_COLORS[pitch ? tuneColor(pitch.cents) : 'orange'];
-  const ref = (v: number) => setPrefs({ ...prefs, reference: Math.max(430, Math.min(450, v)) });
+function Tuner({ hz, input, onClose }: { hz: number; input: string; onClose: () => void }) {
+  const n = hz ? 12 * Math.log2(hz / 440) + 69 : 0;
+  const cents = hz ? Math.round((n - Math.round(n)) * 100) : 0;
+  const angle = Math.max(-50, Math.min(50, cents)) * 1.2;
+  const inTune = hz > 0 && Math.abs(cents) <= 3;
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`gb-tuner${pitch ? ` tune-${tuneColor(pitch.cents)}` : ''}`} style={{ '--tune': color } as CSSProperties} role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label="Tuner">
+      <div className={`gb-tuner${inTune ? ' in-tune' : ''}`} role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Tuner">
         <header><button className="gb-close" aria-label="Close tuner" title="Close (T or Esc)" onClick={onClose} />{input}</header>
         <div className="gb-face">
           <svg viewBox="0 0 900 560" aria-hidden>
             <path d="M 0 560 L 900 170 L 900 0 L 0 0 Z" fill="rgba(255,255,255,.035)" />
             <path d={arc(300, -60, 60)} stroke="#2a2a2c" strokeWidth="16" fill="none" />
-            {/* the zones: green ±3, yellow ±10, orange ±25, red beyond */}
-            {([[-50, -25, 'red'], [-25, -10, 'orange'], [-10, -3, 'yellow'], [-3, 3, 'green'], [3, 10, 'yellow'], [10, 25, 'orange'], [25, 50, 'red']] as const).map(([a, b, c]) => (
-              <path key={a} d={arc(326, a * 1.2, b * 1.2)} stroke={TUNE_COLORS[c]} strokeWidth="6" fill="none" opacity=".55" />
-            ))}
             {Array.from({ length: 21 }, (_, i) => {
               const c = -50 + i * 5, a = polar(292, c * 1.2), b = polar(308, c * 1.2);
               return <line key={c} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#1a1a1b" strokeWidth={c % 10 ? 2 : 3} />;
             })}
             {Array.from({ length: 11 }, (_, i) => {
-              const c = -50 + i * 10, p = polar(356, c * 1.2);
+              const c = -50 + i * 10, p = polar(350, c * 1.2);
               return <text key={c} x={p.x} y={p.y + 9} className="gb-label">{c}</text>;
             })}
-            {pitch && (
+            {hz > 0 && (
               <>
-                <path d={`M ${polar(150, 0).x} ${polar(150, 0).y} L ${polar(300, 0).x} ${polar(300, 0).y} A 300 300 0 0 ${angle > 0 ? 1 : 0} ${polar(300, angle).x} ${polar(300, angle).y} L ${polar(150, angle).x} ${polar(150, angle).y} Z`} fill={color} opacity=".16" />
-                <path d={arc(300, 0, angle || 0.01)} stroke={color} strokeWidth="16" fill="none" opacity=".75" />
-                <g style={{ transform: `rotate(${angle}deg)`, transformOrigin: `${PIVOT.x}px ${PIVOT.y}px` }}>
-                  <line x1={PIVOT.x} y1={PIVOT.y - 150} x2={PIVOT.x} y2={PIVOT.y - 312} stroke={color} strokeWidth="5" strokeLinecap="round" />
+                <path d={`M ${polar(150, 0).x} ${polar(150, 0).y} L ${polar(300, 0).x} ${polar(300, 0).y} A 300 300 0 0 ${angle > 0 ? 1 : 0} ${polar(300, angle).x} ${polar(300, angle).y} L ${polar(150, angle).x} ${polar(150, angle).y} Z`} fill="rgba(240,138,36,.16)" />
+                <path d={arc(300, 0, angle || 0.01)} stroke="#f08a24" strokeWidth="16" fill="none" opacity=".75" />
+                <g className="gb-needle" style={{ transform: `rotate(${angle}deg)`, transformOrigin: `${PIVOT.x}px ${PIVOT.y}px` }}>
+                  <line x1={PIVOT.x} y1={PIVOT.y - 150} x2={PIVOT.x} y2={PIVOT.y - 312} stroke="#f08a24" strokeWidth="5" strokeLinecap="round" />
                 </g>
               </>
             )}
@@ -76,39 +68,25 @@ function Tuner({ hz, input, prefs, setPrefs, onClose }: { hz: number; input: str
           </svg>
           <div className="gb-readout" aria-live="polite">
             <span>{hz ? `${hz.toFixed(1)} Hz` : '– Hz'}</span>
-            <b>{pitch?.note ?? '–'}</b>
-            <span>{pitch ? `${cents > 0 ? '+' : ''}${cents} cents` : 'play a string'}</span>
+            <b>{hz ? NOTES[((Math.round(n) % 12) + 12) % 12] : '–'}</b>
+            <span>{hz ? `${cents > 0 ? '+' : ''}${cents} cents` : 'play a string'}</span>
           </div>
         </div>
-        <footer className="gb-controls">
-          <div className="gb-ref" role="group" aria-label="Reference pitch">
-            <span>A4</span>
-            <button className="icon small" aria-label="Lower reference" onClick={() => ref(prefs.reference - 1)} disabled={prefs.reference <= 430}>−</button>
-            <output>{prefs.reference} Hz</output>
-            <button className="icon small" aria-label="Raise reference" onClick={() => ref(prefs.reference + 1)} disabled={prefs.reference >= 450}>+</button>
-            {prefs.reference !== 440 && <button className="text-button" onClick={() => ref(440)}>440</button>}
-          </div>
-          <div className="segmented" role="group" aria-label="While tuning">
-            <button aria-pressed={prefs.mute} onClick={() => setPrefs({ ...prefs, mute: true })} title="Silence the output while tuning">Mute</button>
-            <button aria-pressed={!prefs.mute} onClick={() => setPrefs({ ...prefs, mute: false })} title="Keep hearing the rig while tuning">Bypass</button>
-          </div>
-        </footer>
+        <footer>Tuner</footer>
       </div>
     </div>
   );
 }
 
 // Settings: the audio device, the TONE3000 key and sign-in, and the open-source parts inside.
-function Settings({ audio, onClose, captures }: {
-  audio: State; onClose: () => void; captures: { missing: number; total: number; busy?: string; get: () => void };
-}) {
+function Settings({ audio, onClose }: { audio: State; onClose: () => void }) {
   const { t3k, signIn: pending } = useLibrary();
   const [key, setKeyText] = useState('');
   const [error, setError] = useState('');
   const latency = (audio.inputMs ?? 0) + (audio.outputMs ?? 0);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="settings" role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label="Settings">
+      <div className="settings" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Settings">
         <header className="inspector-head"><div className="inspector-title"><h2>Settings</h2></div>
           <button className="icon" aria-label="Close" onClick={onClose}><X size={16} strokeWidth={1.5} /></button></header>
         <section>
@@ -119,7 +97,7 @@ function Settings({ audio, onClose, captures }: {
           {audio.plugin
             ? <p className="hint">In a DAW, the host chooses the device, rate and buffer.</p>
             : <button className="button quiet" onClick={() => call('openAudioSettings')}>Choose audio device</button>}
-          <p className="hint">NAM captures are made at 48 kHz; at other rates Rigsmith converts to and from it, adding about 1 ms.</p>
+          <p className="hint">NAM captures are made at 48 kHz; run your interface at 48 kHz to hear them as made.</p>
         </section>
         <section>
           <h3>TONE3000</h3>
@@ -139,12 +117,6 @@ function Settings({ audio, onClose, captures }: {
             <button className="button quiet" disabled={!t3k.hasKey} onClick={async () => { const err = await signIn(); if (err) setError(err); }}>Sign in</button>
           )}
           {error && <p className="inline-error" role="alert">{error}</p>}
-          <p className="settings-value">
-            {captures.missing ? `${captures.missing} of the ${captures.total} captures the built-in presets use aren't on this Mac` : `All ${captures.total} preset captures are on this Mac`}
-            {captures.missing > 0 && (
-              <button className="text-button" disabled={!t3k.signedIn || !!captures.busy} onClick={captures.get}>{captures.busy ?? 'Download all'}</button>
-            )}
-          </p>
           <button className="powered" onClick={() => call('openUrl', 'https://www.tone3000.com')}>Powered by TONE3000</button>
         </section>
         <section>
@@ -176,18 +148,15 @@ export function App() {
   const [live, setLive] = useState<Live>({});
   const [muted, setMuted] = useState(false);
   const [tuning, setTuning] = useState(false);
-  const [tunerPrefs, setTunerPrefs] = useState<TunerPrefs>(() => {
-    try { return { reference: 440, mute: true, ...JSON.parse(localStorage.getItem('tuner') ?? '{}') }; } catch { return { reference: 440, mute: true }; }
-  });
   const [help, setHelp] = useState(false);
   const [settings, setSettings] = useState(false);
-  const [fetching, setFetching] = useState<string>(); // progress while downloading captures
+  const [fetching, setFetching] = useState(false);
   const [stage, setStage] = useState<Stage>({ set: `b:${Object.keys(SETS)[0]}`, at: -1 });
   const library = useLibrary();
 
-  const flash = (msg: string, ms = 3000) => {
+  const flash = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast((t) => (t === msg ? '' : t)), ms);
+    setTimeout(() => setToast((t) => (t === msg ? '' : t)), 3000);
   };
   const apply = (next: History) => { hRef.current = next; setH(next); };
   const edit: Edit = (change, group) => {
@@ -261,42 +230,29 @@ export function App() {
     edit(() => fixed, 'resolve');
     if (wasLoaded && current) setCurrent({ ...current, rig: fixed });
   }, [library.entries, h?.present]);
-  // Downloads captures from TONE3000, one tone at a time (its standard-size model unless the rig
-  // names one), then reports what didn't come down and why.
-  const fetchCaptures = async (files: FileRef[]) => {
+  const fetchMissing = async () => {
     if (!library.t3k.signedIn) { setSettings(true); flash('Sign in to TONE3000 to download the captures'); return; }
-    const todo = [...new Map(files.filter((f) => f.toneId !== undefined).map((f) => [String(f.toneId), f])).values()];
-    const errors: string[] = [];
-    for (const [i, f] of todo.entries()) {
-      setFetching(`Downloading ${i + 1} of ${todo.length}`);
-      const t = await tone(f.toneId!);
+    setFetching(true);
+    for (const m of missing.filter((x) => x.file.toneId !== undefined)) {
+      const t = await tone(m.file.toneId!);
       const list = failed(t) ? t : await models(t.id);
-      if (failed(t) || failed(list)) { errors.push(`${f.name}: ${(failed(t) ? t : (list as { error: string })).error}`); continue; }
-      const model = list.data.find((x) => String(x.id) === String(f.modelId)) ?? list.data.find((x) => x.size === 'standard') ?? list.data[0];
-      if (!model) { errors.push(`${t.title}: TONE3000 lists no models for it (private or removed?)`); continue; }
+      if (failed(t) || failed(list)) { flash((failed(t) ? t : (list as { error: string })).error); continue; }
+      const model = list.data.find((x) => String(x.id) === String(m.file.modelId)) ?? list.data.find((x) => x.size === 'standard') ?? list.data[0];
+      if (!model) { flash(`${t.title} has no models to download`); continue; }
       const r = await download(t, model);
-      if (failed(r)) errors.push(r.error);
+      if (failed(r)) flash(r.error);
     }
     await refreshLibrary();
-    setFetching(undefined);
-    if (errors.length) flash(`${todo.length - errors.length} of ${todo.length} downloaded. ${errors.join('; ')}`, 12000);
-    else flash(`Downloaded ${todo.length} ${todo.length === 1 ? 'capture' : 'captures'}`);
+    setFetching(false);
   };
-  const fetchMissing = () => fetchCaptures(missing.map((m) => m.file));
-  const presetsMissing = PRESET_CAPTURES.filter((f) => !library.entries.some((e) => String(e.toneId) === String(f.toneId)));
 
   const inputs = h ? Object.values(h.present.devices).filter((d) => d.type === 'input') : [];
   const inputMuted = inputs.length > 0 && inputs.every((d) => !d.on);
   const muteInputs = () => edit((r) => inputs.filter((d) => d.on === !inputMuted).reduce((acc, d) => toggle(acc, d.id), r));
   const setMute = (v: boolean) => { setMuted(v); call('set', 'mute', v); };
-  const setTuner = (v: boolean, prefs = tunerPrefs) => {
+  const setTuner = (v: boolean) => {
     setTuning(v);
-    call('tuner', v, inputs[0]?.params.channel ?? 0, prefs.mute);
-  };
-  const changeTunerPrefs = (p: TunerPrefs) => {
-    setTunerPrefs(p);
-    try { localStorage.setItem('tuner', JSON.stringify(p)); } catch { /* private window */ }
-    if (tuning) setTuner(true, p);
+    call('tuner', v, inputs[0]?.params.channel ?? 0);
   };
 
   // Global keys; Board.tsx handles the ones about the selection.
@@ -390,10 +346,19 @@ export function App() {
           {saving === null ? (
             <>
               <button className="icon" title="Previous preset (←)" aria-label="Previous preset" onClick={() => step(-1)}><ChevronLeft {...icon} /></button>
-              <PresetPicker current={current?.key} onPick={load} groups={[
-                ...categories.map((cat) => ({ label: cat, keys: Object.entries(PRESETS).filter(([, p]) => p.category === cat).map(([n]) => `b:${n}`) })),
-                ...(presets.length ? [{ label: 'Your presets', keys: presets.map((n) => `u:${n}`) }] : []),
-              ]} />
+              <select className="preset-select" aria-label="Preset" value={current?.key ?? ''} onChange={(e) => load(e.target.value)}>
+                <option value="" disabled>Unsaved rig</option>
+                {categories.map((cat) => (
+                  <optgroup key={cat} label={cat}>
+                    {Object.entries(PRESETS).filter(([, p]) => p.category === cat).map(([n]) => <option key={n} value={`b:${n}`}>{n}</option>)}
+                  </optgroup>
+                ))}
+                {presets.length > 0 && (
+                  <optgroup label="Your presets">
+                    {presets.map((n) => <option key={n} value={`u:${n}`}>{n}</option>)}
+                  </optgroup>
+                )}
+              </select>
               <button className="icon" title="Next preset (→)" aria-label="Next preset" onClick={() => step(1)}><ChevronRight {...icon} /></button>
               {current && current.rig !== h.present && <span className="edited">edited</span>}
               <button className="icon" title="Save as preset (⌘S)" aria-label="Save as preset" onClick={() => setSaving(userPreset ?? '')}><Save {...icon} /></button>
@@ -438,7 +403,7 @@ export function App() {
           <input className="master" type="range" min={0} max={1} step={0.01} value={audio.volume} aria-label="Master volume" title="Master volume"
             onChange={(e) => setMaster(Number(e.target.value))} />
           <span className="readout" title={`RAM ${Math.round(meter.ram)} MB`}>
-            {audio.sampleRate ? `${latency.toFixed(1).padStart(4, '\u2007')} ms` : 'no audio device'} · CPU {cpuText(meter.cpu)}%
+            {audio.sampleRate ? `${latency.toFixed(1)} ms` : 'no audio device'} · CPU {Math.round(meter.cpu * 100)}%
           </span>
           <button className="icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => setHelp(true)}><Keyboard {...icon} /></button>
           <button className="icon" title="Settings (,)" aria-label="Settings" onClick={() => setSettings(true)}><Settings2 {...icon} /></button>
@@ -449,12 +414,7 @@ export function App() {
           <div className="missing" role="status">
             <span><i className="lamp warn" />{missing.length} {missing.length === 1 ? 'capture isn\u2019t' : 'captures aren\u2019t'} on this Mac</span>
             {missing.some((m) => m.file.toneId !== undefined)
-              ? <>
-                  <button className="text-button" disabled={!!fetching} onClick={fetchMissing}>{fetching ?? 'Get from TONE3000'}</button>
-                  {!fetching && presetsMissing.length > missing.length && (
-                    <button className="text-button" onClick={() => fetchCaptures(presetsMissing)}>Get all {presetsMissing.length} preset captures</button>
-                  )}
-                </>
+              ? <button className="text-button" disabled={fetching} onClick={fetchMissing}>{fetching ? 'Downloading' : 'Get from TONE3000'}</button>
               : <span className="hint">Add the file under Captures</span>}
           </div>
         </div>
@@ -463,21 +423,18 @@ export function App() {
         <LiveMode rig={h.present} edit={edit} current={current?.key} presets={presets} loadPreset={loadPreset} play={play}
           stage={stage} setStage={setStage} flash={flash}
           onExit={() => setView('board')} onTune={() => setTuner(true)} muted={muted} onMute={() => setMute(!muted)}
-          levels={{ in: meter.peak, out: meter.out }} live={live} inputs={audio.inputs ?? []}
-          onSave={() => (userPreset ? saveAs(userPreset) : setSaving(''))} />
+          levels={{ in: meter.peak, out: meter.out }} live={live} />
       ) : (
         <ReactFlowProvider>
           <Board rig={h.present} view={view} edit={edit} flash={flash} inputs={audio.inputs ?? []} live={live} onSettings={() => setSettings(true)}
             levels={{ in: meter.peak, out: meter.out, cpu: meter.cpu, ram: meter.ram }} />
         </ReactFlowProvider>
       )}
-      {settings && <Settings audio={audio} onClose={() => { setSettings(false); refreshLibrary(); }}
-        captures={{ missing: presetsMissing.length, total: PRESET_CAPTURES.length, busy: fetching, get: () => fetchCaptures(presetsMissing) }} />}
-      {tuning && <Tuner hz={live.__tuner?.hz ?? 0} input={audio.inputs?.[inputs[0]?.params.channel ?? 0] ?? 'Input 1'}
-        prefs={tunerPrefs} setPrefs={changeTunerPrefs} onClose={() => setTuner(false)} />}
+      {settings && <Settings audio={audio} onClose={() => { setSettings(false); refreshLibrary(); }} />}
+      {tuning && <Tuner hz={live.__tuner?.hz ?? 0} input={audio.inputs?.[inputs[0]?.params.channel ?? 0] ?? 'Input 1'} onClose={() => setTuner(false)} />}
       {help && (
         <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setHelp(false)}>
-          <div className="help" role="dialog" aria-modal="true" tabIndex={-1} ref={focusOnOpen} aria-label="Keyboard shortcuts">
+          <div className="help" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label="Keyboard shortcuts">
             <header className="inspector-head"><div className="inspector-title"><h2>Keyboard shortcuts</h2></div>
               <button className="icon" aria-label="Close" onClick={() => setHelp(false)}><X {...icon} /></button></header>
             <dl>{KEYS.map(([k, what]) => <div key={k}><dt><kbd>{k}</kbd></dt><dd>{what}</dd></div>)}</dl>

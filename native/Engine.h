@@ -33,7 +33,6 @@ public:
     std::atomic<bool> muted { false };   // master mute: the rig keeps running, nothing reaches the speakers
     // Standalone tuner: hears an interface input directly, whatever the rig, and mutes the output while open.
     std::atomic<bool> tuning { false };
-    std::atomic<bool> tunerMutes { true }; // false: tune while still hearing the rig
     std::atomic<int> tunerChannel { 0 };
     Tuner tuner;
 
@@ -98,7 +97,7 @@ public:
         // A rig change fades this block out and the next one in, so re-cabling never clicks.
         if (tuning && tunerChannel < numIn && in[tunerChannel] != nullptr)
             tuner.feed (in[tunerChannel], n);
-        master.setTargetValue (muted || (tuning && tunerMutes) ? 0.0f : masterTarget.load());
+        master.setTargetValue (muted || tuning ? 0.0f : masterTarget.load());
         float top = 0.0f;
         for (int i = 0; i < n; ++i)
         {
@@ -145,26 +144,18 @@ private:
         return s;
     }
 
-    // Writes the node's knobs, switch and files. True only when a knob or file really changed, so
-    // retuning and configure() run for the nodes you touched, not for every node on every knob turn.
-    static bool applyParams (Node& node, const var& n)
+    static void applyParams (Node& node, const var& n)
     {
-        bool changed = false;
         if (const auto* ps = n["params"].getArray())
             for (int i = 0; i < std::min (ps->size(), (int) node.p.size()); ++i)
-            {
-                const auto v = (float) (double) ps->getReference (i);
-                if (node.p[(size_t) i].load() != v) { node.p[(size_t) i] = v; changed = true; }
-            }
+                node.p[(size_t) i] = (float) (double) ps->getReference (i);
         node.on = (bool) n["on"];
-        std::map<String, String> files;
+        node.files.clear();
         if (auto* f = n["files"].getDynamicObject())
             for (const auto& slot : f->getProperties())
                 if (const auto file = libraryFile (slot.value.toString()); file != File())
-                    files[slot.name.toString()] = file.getFullPathName();
-        if (files != node.files) { node.files = std::move (files); changed = true; }
-        if (changed) node.version++;
-        return changed;
+                    node.files[slot.name.toString()] = file.getFullPathName();
+        node.version++;
     }
 
     // Returns null when only params changed (they're already applied).
@@ -182,10 +173,10 @@ private:
             const auto id = n["id"].toString(), type = n["type"].toString();
             auto it = byId.find (id);
             auto node = ! fresh && it != byId.end() && it->second->type == type ? it->second : makeAnyNode (type);
-            const bool changed = applyParams (*node, n);
-            const bool isNew = node != (it != byId.end() ? it->second : nullptr) || fresh;
-            if (isNew) node->prepareNode (sr, maxBlock);
-            if (isNew || changed) node->configure();
+            applyParams (*node, n);
+            if (node != (it != byId.end() ? it->second : nullptr) || fresh)
+                node->prepareNode (sr, maxBlock);
+            node->configure();
             next[id] = node;
         }
         byId = std::move (next);

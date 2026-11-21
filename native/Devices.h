@@ -581,7 +581,7 @@ struct Acoustic : Node // p: body (dreadnought, jumbo, parlor, nylon), mix, top 
 };
 
 // Tuner: mutes the signal while engaged. The UI asks detect() for the pitch.
-struct Tuner : Node // p: reference A4 Hz, mode (0 mute while tuning, 1 bypass: you still hear it)
+struct Tuner : Node // p: reference A4 Hz
 {
     Tuner() : Node (1, 1) {}
     static constexpr int size = 8192;
@@ -591,8 +591,7 @@ struct Tuner : Node // p: reference A4 Hz, mode (0 mute while tuning, 1 bypass: 
     void render (const float* const* in, float* const* out, int n, IO&) override
     {
         feed (in[0], n);
-        if (p[1] > 0.5f) FloatVectorOperations::copy (out[0], in[0], n);
-        else FloatVectorOperations::clear (out[0], n);
+        FloatVectorOperations::clear (out[0], n);
     }
 
     // Audio thread: listen to `n` samples. The standalone tuner calls this with the raw input.

@@ -143,30 +143,6 @@ static void checkDevices()
             if (static_cast<rig::Nam&> (*nm).missing) std::printf ("  nam %s: %s\n", file, static_cast<rig::Nam&> (*nm).lastError.toRawUTF8());
             CHECK (! static_cast<rig::Nam&> (*nm).missing);
         }
-        // At 44.1 kHz a 48 kHz capture is converted to its rate and back: same level, still clean.
-        {
-            const auto play = [&] (double rate) {
-                auto nm = rig::makeAnyNode ("namAmp");
-                nm->files["model"] = String (NAM_EXAMPLES) + "/lstm.nam";
-                nm->prepareNode (rate, N);
-                nm->configure();
-                std::vector<float> in ((size_t) second);
-                for (size_t i = 0; i < in.size(); ++i) in[i] = 0.2f * (float) std::sin (2 * M_PI * 220 * (double) i / rate);
-                auto out = renderNode (*nm, { in })[0];
-                CHECK (static_cast<rig::Nam&> (*nm).live.rate == (rate == 48000.0 ? 0.0 : 48000.0));
-                return out;
-            };
-            const auto at48 = play (48000.0), at44 = play (44100.0);
-            bool finite = true;
-            for (float v : at44) finite = finite && std::isfinite (v);
-            const float a = rms (at48, second / 2), b = rms (at44, second / 2);
-            if (! (finite && std::abs (20 * std::log10 (b / a)) < 1.0f)) std::printf ("  nam 44.1k: rms %.5f vs %.5f at 48k\n", b, a);
-            CHECK (finite && std::abs (20 * std::log10 (b / a)) < 1.0f);
-            int run = 0, longest = 0; // after the first block, never a run of silence (a starved queue)
-            for (size_t i = (size_t) N; i < at44.size(); ++i) { run = std::abs (at44[i]) < 1e-7f ? run + 1 : 0; longest = std::max (longest, run); }
-            if (longest > 4) std::printf ("  nam 44.1k: %d silent samples in a row\n", longest);
-            CHECK (longest <= 4);
-        }
         auto none = rig::makeAnyNode ("namPedal");
         none->files["model"] = "/nonexistent.nam";
         none->prepareNode (SR, N);
@@ -243,16 +219,6 @@ static void checkDevices()
             if (! near (heard, hz, hz * 0.003f)) std::printf ("  tuner heard %.2f for %.2f\n", heard, hz);
             CHECK (near (heard, hz, hz * 0.003f));
         }
-        // Bypass mode: you keep hearing the guitar while it tunes.
-        const auto in = sine (440, 0.2f, second / 4);
-        CHECK (near (rms (renderNode (*make ("tuner", { 440, 1 }), { in })[0], second / 8), rms (in, second / 8), 1e-4f));
-    }
-    { // Output protection: transparent below 0.7 (-3.1 dBFS), never above 1.0 for any level.
-        bool clean = true, bounded = true;
-        for (float x = -0.7f; x <= 0.7f; x += 0.01f) clean &= rig::softClip (x) == x;
-        for (float x = -50.0f; x <= 50.0f; x += 0.37f) bounded &= std::abs (rig::softClip (x)) <= 1.0f;
-        CHECK (clean);
-        CHECK (bounded);
     }
     { // Volume pedal: heel down is silent, toe down is unity.
         const auto in = sine (440, 0.2f, second / 4);

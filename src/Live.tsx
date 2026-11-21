@@ -1,14 +1,12 @@
 // Live mode: the stage screen, built around a set. A set is your setlist: songs, each with scenes, and
 // every scene is a whole sound taken from any preset (built-in, yours, or what's on the board now) and
 // changed however you like. Left: the setlist. Right: the scene playing, the next one, the
-// footswitches of the rig, tuner, tap tempo and levels. The pencil on any block opens its knobs and
-// Replace on the right; changes save into the scene or to a preset.
+// footswitches of the rig, tuner, tap tempo and levels. Knobs stay on the board.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Pencil, Plus, Save, Search, SlidersHorizontal, Trash2, VolumeX, Volume2, X } from 'lucide-react';
-import { DeviceEditor } from './Board';
-import { def, makerOf } from './catalog';
-import { colorOf, deviceName, tapeName, useShot, type Edit, type Live as LiveData } from './gear';
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Pencil, Plus, Search, Trash2, VolumeX, Volume2, X } from 'lucide-react';
+import { def } from './catalog';
+import { deviceName, useShot, type Edit, type Live as LiveData } from './gear';
 import { layoutGrid } from './layout';
 import { call } from './native';
 import { PRESETS, SETS } from './presets';
@@ -24,14 +22,12 @@ const presetName = (key: string) => (key ? key.slice(2) : 'Board');
 // Where Live mode is in which set; kept by the app so leaving Live and coming back keeps your place.
 export type Stage = { set: string; at: number }; // set: 'b:' example or 'u:' yours; at: -1 before the first scene
 
-export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage, setStage, flash, onExit, onTune, muted, onMute, levels, live, inputs, onSave }: {
+export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage, setStage, flash, onExit, onTune, muted, onMute, levels, live }: {
   rig: Rig; edit: Edit; current?: string; presets: string[]; loadPreset: (key: string) => Promise<Rig>;
   play: (scene: SetScene) => void; stage: Stage; setStage: (s: Stage) => void; flash: (msg: string) => void;
   onExit: () => void; onTune: () => void; muted: boolean; onMute: () => void; levels: { in: number; out: number }; live: LiveData;
-  inputs: string[]; onSave: () => void;
 }) {
   const [mine, setMine] = useState<Record<string, LiveSet>>();
-  const [tweak, setTweak] = useState<string>(); // the block open in the editor
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [naming, setNaming] = useState<string | null>(null);
@@ -107,10 +103,6 @@ export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage,
   const pos = layoutGrid(rig);
   const stomps = Object.values(rig.devices).filter((d) => def(d.type).footswitch && d.type !== 'tuner' && pos[d.id])
     .sort((a, b) => pos[a.id].y - pos[b.id].y || pos[a.id].x - pos[b.id].x);
-  // Blocks without a footswitch (amps, cabs, captures, tuner...) can still be opened and tweaked.
-  const blocks = Object.values(rig.devices).filter((d) => pos[d.id] && !stomps.includes(d) && !['input', 'output', 'power', 'board', 'splitter', 'joiner'].includes(d.type))
-    .sort((a, b) => pos[a.id].y - pos[b.id].y || pos[a.id].x - pos[b.id].x);
-  const tweaking = tweak ? rig.devices[tweak] : undefined;
   const delays = Object.values(rig.devices).filter((d) => d.type === 'delay');
   const taps = useRef<number[]>([]);
   const [bpm, setBpm] = useState<number>();
@@ -128,7 +120,7 @@ export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage,
   const loads = useMemo(() => set?.scenes.map((s, i) => i > 0 && !sameShape(set.scenes[i - 1].rig, s.rig)) ?? [], [set]);
 
   return (
-    <div className={`live${tweaking ? ' with-editor' : ''}`}>
+    <div className="live">
       <aside className="setlist" aria-label="Setlist">
         <header className="setlist-head">
           {naming === null ? (
@@ -218,7 +210,6 @@ export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage,
             <span><i className="lamp warn" />Changed since this scene started</span>
             <button className="text-button" onClick={() => change((x) => changeScene(x, stage.at, { rig }))}>Save into the scene</button>
             <button className="text-button" onClick={() => add({ name: `${scene.name} 2`, from: scene.from, rig })}>Save as a new scene</button>
-            <button className="text-button" onClick={onSave}><Save {...icon} />Save to preset</button>
             <button className="text-button" onClick={() => play(scene)}>Undo changes</button>
           </div>
         )}
@@ -227,29 +218,15 @@ export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage,
           {stomps.map((d, i) => {
             const lit = d.on && isPowered(rig, d.id);
             return (
-              <div key={d.id} className={`live-stomp-wrap${tweak === d.id ? ' tweaking' : ''}`}>
-                <button className={`live-stomp${lit ? ' on' : ''}`} aria-pressed={d.on} onClick={() => edit((r) => toggle(r, d.id))}>
-                  <StompShot d={d} /><span>{deviceName(d)}</span><i className="lamp red" />{i < 9 && <kbd>{STOMP_KEYS[i].toUpperCase()}</kbd>}
-                </button>
-                <button className="icon small live-tweak" aria-label={`Edit ${deviceName(d)}`} title="Knobs and replace" aria-pressed={tweak === d.id}
-                  onClick={() => setTweak(tweak === d.id ? undefined : d.id)}><SlidersHorizontal {...icon} /></button>
-              </div>
+              <button key={d.id} className={`live-stomp${lit ? ' on' : ''}`} aria-pressed={d.on} onClick={() => edit((r) => toggle(r, d.id))}>
+                <StompShot d={d} /><span>{deviceName(d)}</span><i className="lamp red" />{i < 9 && <kbd>{STOMP_KEYS[i].toUpperCase()}</kbd>}
+              </button>
             );
           })}
         </section>
-        {blocks.length > 0 && (
-          <section className="live-blocks" aria-label="Other blocks">
-            {blocks.map((d) => (
-              <button key={d.id} className={`chip-block${tweak === d.id ? ' on' : ''}${d.on ? '' : ' off'}`} aria-pressed={tweak === d.id} onClick={() => setTweak(tweak === d.id ? undefined : d.id)}>
-                <span className="swatch" style={{ background: colorOf(d.type, d.params) }} />{tapeName(rig, d)}<SlidersHorizontal size={14} strokeWidth={1.5} />
-              </button>
-            ))}
-          </section>
-        )}
 
         <footer className="live-foot">
           <button className="live-tool" onClick={onTune}>Tune</button>
-          <button className="live-tool" onClick={onSave} title="Save the rig as a preset (⌘S)"><Save size={18} strokeWidth={1.5} />Save</button>
           <button className="live-tool" onClick={tap} disabled={!delays.length} title={delays.length ? 'Tap the beat to set every delay' : 'No delay in this rig'}>
             Tap{bpm ? <b>{bpm} BPM</b> : null}
           </button>
@@ -263,21 +240,6 @@ export function LiveMode({ rig, edit, current, presets, loadPreset, play, stage,
           {Object.values(live).some((x) => x.missing) && <span className="live-warn">A capture is missing</span>}
         </footer>
       </main>
-
-      {tweaking && (
-        <aside className="inspector live-editor" aria-label={`${tapeName(rig, tweaking)} controls`}>
-          <header className="inspector-head">
-            <span className="swatch" style={{ background: colorOf(tweaking.type, tweaking.params) }} />
-            <div className="inspector-title"><h2>{tapeName(rig, tweaking)}</h2><span>{makerOf(tweaking.type, tweaking.params)} · {def(tweaking.type).label}</span></div>
-            <button className="icon" aria-label="Close" onClick={() => setTweak(undefined)}><X {...icon} /></button>
-          </header>
-          <DeviceEditor d={tweaking} rig={rig} edit={edit} live={live} inputs={inputs} onReplaced={setTweak} />
-          <div className="live-editor-save">
-            {scene && <button className="button quiet" onClick={() => change((x) => changeScene(x, stage.at, { rig }))}>Save into the scene</button>}
-            <button className="button quiet" onClick={onSave}><Save {...icon} />Save to preset</button>
-          </div>
-        </aside>
-      )}
 
       {adding && <AddScene rig={rig} current={current} presets={presets} loadPreset={loadPreset} onAdd={add} onClose={() => setAdding(false)} />}
     </div>

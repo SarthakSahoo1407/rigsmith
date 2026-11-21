@@ -7,22 +7,21 @@ A guitar rig simulator for macOS, as an app and as an AU/VST3 plugin. Place as m
 ## What it does
 
 - **Free routing.** Audio follows the cables, like a real rig. Amps have an effects loop (send/return), and splitters and joiners let you run parallel chains, for example two amps panned left and right.
-- **Several pedalboards.** Add boards from the gear list (Compact 20, Touring 32, Touring 40, Stage 52; black, silver or walnut). They sit side by side; drag a pedal onto a board to move it there. Click a board's name to select it, double-click to change its size or finish, ⌫ to remove it (its pedals move to the first board).
 - **Power matters.** A pedal with no power cable is silent. Press P, or click "Plug into power", to wire it to a free outlet.
 - **Three views.**
   - **Board:** the stage, a railed pedalboard and the desk, with every piece rendered in 3D and cables that hang with real plugs.
   - **Grid:** Quad Cortex-style blocks in signal order, each with a picture of its gear, and a panel that shows the whole rig or the selected block.
-  - **Live:** your set on stage: the setlist on the left, the scene playing in big type, the next one, the rig's footswitches, tuner, tap tempo and levels. The slider button on any block opens its knobs and Replace; save into the scene or to a preset.
+  - **Live:** your set on stage: the setlist on the left, the scene playing in big type, the next one, the rig's footswitches, tuner, tap tempo and levels. Knobs stay on the board.
 - **Gear:** 9 amps, 4 cabs, 3 mics and 30 pedals (dynamics, drive, fuzz, pitch, filter, modulation, delay, reverb, looper), each with its own fictional maker and look.
 - **NAM captures.** NAM amp, full-rig and pedal blocks run [Neural Amp Modeler](https://github.com/sdatkinson/NeuralAmpModelerCore) captures (`.nam`, including the A2 format).
 - **TONE3000 browser.** Search, download and use captures and IRs from [TONE3000](https://www.tone3000.com) inside the app, with each creator's name and license kept beside the file. Rigsmith ships no third-party captures: their licenses don't allow it, so presets that use them fetch them from TONE3000 on your request.
 - **Rendered gear.** Every pedal, amp, cab, speaker, mic, footswitch and knob is a 3D model (three.js) lit by a warm key light and rendered once to an image: you see each piece's sides, depth, chrome and tolex, while the knobs, switches and labels on top stay live. Cables hang with real plugs; the pedals sit on a railed board.
 - **Live sets and scenes.** A set is a setlist of songs, each with scenes. A scene is any sound: a built-in preset, one of yours, or what's on the board now, changed however you like (other knobs, pedals on or off). Scenes from the same preset switch without a gap; one from another preset loads its rig. Seven example sets come with it (worship, rock covers, metal, blues, ambient, funk and country, acoustic), with made-up songs and their riffs, verses, choruses and solos.
-- **Amps.** A power switch (off passes nothing). Clean, drive and lead channels with their own gain and EQ, bright/deep/fat switches, power tubes (EL34, 6L6, KT88, EL84), bias, sag and supply voltage.
-- **Cab and mic studio.** Up to four mics per cab, dragged anywhere on the speaker, each with level, pan, distance, angle, time-align, polarity and solo, mixed to the cab's stereo outs, or skip the mics with the cab's Direct out. Or real IRs in two slots with a blend and low/high cut.
+- **Amps.** Clean, drive and lead channels with their own gain and EQ, bright/deep/fat switches, power tubes (EL34, 6L6, KT88, EL84), bias, sag and supply voltage.
+- **Cab and mic studio.** Up to four mics per cab, dragged anywhere on the speaker, each with level, pan, distance, angle, time-align, polarity and solo, mixed to the cab's stereo outs. Or real IRs in two slots with a blend and low/high cut.
 - **Presets:** 44 built-in presets (clean, acoustic, crunch, lead, metal, ambient, live rigs, NAM captures, hybrids of captures and modelled gear), plus your own.
 - **Tools:**
-  - a standalone tuner and a tuner pedal: green, yellow, orange and red for how close, a reference pitch (A4 = 430–450 Hz), and mute or bypass while tuning
+  - a standalone tuner
   - master and input mute
   - input and output meters
   - latency, CPU and RAM readouts
@@ -72,7 +71,6 @@ With `RIG_DEV_URL` set, the app loads the Vite dev server, so UI changes hot-rel
   - Drag a knob up or down; double-click it to reset.
   - Click a pedal's footswitch to turn it on or off.
   - Double-click any device for a large view with every control, plus **Replace** and **Delete**.
-  - Select a device or a board and press ⌫, or click the red bin over it, to delete it.
 - **Mics:** drag a mic onto a cab, then drag it across the cone. The centre is brighter and the edge darker. Scroll over the mic to move it closer or farther. Double-click the cab for the full mic studio.
 - **Captures:** drag a capture from **Captures** onto the rig to make a NAM block (amp, full rig or pedal by its type), or onto a cable to insert it. Drag an IR onto a cab to load it.
 - **Live sets:** press **L**. Pick a set, or **+** for a new one. **Add a scene** takes a preset or what's on the board now. To make a scene its own sound, play it, change things on the board, come back and press **Save into the scene** (or **Save as a new scene**). The pencil edits names, songs and order. Changing an example set saves it as your own copy.
@@ -133,5 +131,5 @@ npm run render -- Metal                       # only presets matching a name or 
 - **Names:** all brand names on the gear are fictional. Models are described by what they're inspired by ("UK Plexi", "US Rectified"), never by a real product name.
 - **Tuning:** the tone was tuned by measurement. A real DI recording is the best way to judge and retune it (see `npm run render -- my-di.wav`).
 - **Platform:** macOS only for now. The file encryption uses CommonCrypto.
-- **Sample rate:** NAM captures are made at 48 kHz. At any other interface rate Rigsmith converts the signal to 48 kHz for the capture and back (about 1 ms more latency); at 48 kHz nothing is converted.
+- **Sample rate:** NAM captures are made at 48 kHz; run your interface at 48 kHz to hear them as made (Rigsmith warns otherwise).
 - **Licenses inside:** NeuralAmpModelerCore (MIT), Eigen (MPL 2.0), JUCE 8 (AGPLv3 or commercial), React Flow (MIT), three.js (MIT), lucide (ISC), Geist (SIL OFL 1.1). Powered by TONE3000.

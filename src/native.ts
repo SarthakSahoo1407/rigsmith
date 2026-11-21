@@ -8,7 +8,7 @@ type Backend = {
   emitEvent(id: string, payload: unknown): void;
 };
 
-const backend = (globalThis as { __JUCE__?: { backend: Backend } }).__JUCE__?.backend;
+const backend = (window as { __JUCE__?: { backend: Backend } }).__JUCE__?.backend;
 export const inApp = backend !== undefined;
 
 let nextId = 0;
@@ -44,6 +44,3 @@ export type State = {
 };
 // Levels are peaks since the last update (output before the safety clipper); ram in MB.
 export type Meter = { peak: number; out: number; cpu: number; ram: number };
-
-// Audio CPU as two digits, 00-99, so readouts never change width (and shift the bar) when the load crosses 10%.
-export const cpuText = (load: number) => String(Math.max(0, Math.min(99, Math.round(load * 100)))).padStart(2, '0');
