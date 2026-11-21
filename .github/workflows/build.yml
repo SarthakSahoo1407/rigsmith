@@ -53,7 +53,10 @@ jobs:
           cp -r native/build/Rig_artefacts/Release/. dist-app/
           cp -r native/build/RigPlugin_artefacts/Release/VST3 dist-app/VST3
           choco install innosetup -y --no-progress
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DAppVersion=${{ steps.v.outputs.version }}" "/DAppDir=$PWD/dist-app" "/O$PWD/out" installer/windows/Rigsmith.iss
+          # Git Bash rewrites arguments that start with "/" into Windows paths; ISCC's switches must stay as typed.
+          export MSYS_NO_PATHCONV=1
+          here="$(pwd -W)"
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DAppVersion=${{ steps.v.outputs.version }}" "/DAppDir=$here\\dist-app" "/O$here\\out" installer/windows/Rigsmith.iss
       - name: macOS installer
         if: runner.os == 'macOS'
         run: installer/macos/build-pkg.sh "${{ steps.v.outputs.version }}" native/build out
