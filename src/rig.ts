@@ -204,7 +204,7 @@ export function replaceDevice(rig: Rig, id: string, type: DeviceType, params: Re
   if (old.type === type) return [set(rig, id), id];
 
   let [next, nid] = addDevice(rig, type, old.pos.board);
-  next = set(update(next, nid, { pos: old.pos, on: old.on }), nid);
+  next = set(update(next, nid, { pos: old.pos, on: old.on, hotkey: old.hotkey }), nid);
   const moved = rig.cables.filter((c) => c.from.device === id || c.to.device === id);
   next = removeDevice(next, id);
   const mapJack = (jack: string) => {

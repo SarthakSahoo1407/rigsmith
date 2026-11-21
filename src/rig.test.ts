@@ -398,3 +398,20 @@ describe('grid layout', async () => {
     expect(pos['amp-1'].y).not.toBe(pos['amp-2'].y);
   });
 });
+
+describe('mixer and replace', async () => {
+  const { FADERS } = await import('./Mixer');
+  const { CATALOG } = await import('./catalog');
+  it('every mixer fader is a real knob of its device', () => {
+    for (const [type, names] of Object.entries(FADERS))
+      for (const n of names!) expect(CATALOG[type as keyof typeof CATALOG].params.map((p) => p.name), `${type}.${n}`).toContain(n);
+  });
+  it('replacing a pedal keeps its cables, switch state and hotkey', () => {
+    let [rig] = build('input', 'distortion', 'output');
+    rig = connect(connect(rig, j('input-1', 'out'), j('distortion-1', 'in')), j('distortion-1', 'out'), j('output-1', 'L'));
+    rig = { ...rig, devices: { ...rig.devices, 'distortion-1': { ...rig.devices['distortion-1'], on: false, hotkey: 'q' } } };
+    const [next, id] = replaceDevice(rig, 'distortion-1', 'fuzz');
+    expect(next.devices[id]).toMatchObject({ type: 'fuzz', on: false, hotkey: 'q' });
+    expect(next.cables.map((c) => `${c.from.device}>${c.to.device}`).sort()).toEqual([`${id}>output-1`, `input-1>${id}`]);
+  });
+});

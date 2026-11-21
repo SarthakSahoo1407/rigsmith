@@ -14,6 +14,7 @@ import {
 } from './models';
 import { spriteStyle, useSprite, type Model } from './render3d';
 import { call } from './native';
+import { Picker } from './Picker';
 import { isPowered, placeMic, setFile, setParam, toggle, type Device, type Rig } from './rig';
 
 const maker = (d: Device) => makerOf(d.type, d.params);
@@ -476,17 +477,17 @@ export function CaptureSelect({ d, edit, slot, kind, label }: Pick<Props, 'd' | 
   const files = entries.filter((e) => e.kind === kind);
   const current = d.files?.[slot];
   const known = !current || files.some((e) => e.id === current.id);
+  const none = files.length ? `Choose ${kind === 'nam' ? 'a capture' : 'an IR'}` : `No ${kind === 'nam' ? 'captures' : 'IRs'} yet`;
   return (
-    <select className="capture-select nodrag" aria-label={label ?? `${slot} file`} value={current?.id ?? ''}
-      onChange={(e) => {
-        const entry = files.find((f) => f.id === e.target.value);
+    <Picker className="capture-select" label={label ?? `${slot} file`} value={current?.id ?? ''} placeholder={none}
+      empty={none}
+      options={[{ value: '', label: none }, ...(known ? [] : [{ value: current.id, label: `${current.name} (not on this Mac)` }]),
+        ...files.map((f) => ({ value: f.id, label: f.name, hint: f.author }))]}
+      onChange={(id) => {
+        const entry = files.find((f) => f.id === id);
         edit((r) => setFile(r, d.id, slot, entry && { id: entry.id, name: entry.name, kind: entry.kind, source: entry.source, author: entry.author,
           authorUrl: entry.authorUrl, license: entry.license, toneId: entry.toneId, modelId: entry.modelId, toneUrl: entry.toneUrl, gear: entry.gear }));
-      }}>
-      <option value="">{files.length ? `Choose ${kind === 'nam' ? 'a capture' : 'an IR'}` : `No ${kind === 'nam' ? 'captures' : 'IRs'} yet`}</option>
-      {!known && <option value={current.id}>{current.name} (not on this Mac)</option>}
-      {files.map((f) => <option key={f.id} value={f.id}>{f.name}{f.author ? ` · ${f.author}` : ''}</option>)}
-    </select>
+      }} />
   );
 }
 

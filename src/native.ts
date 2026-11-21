@@ -8,7 +8,7 @@ type Backend = {
   emitEvent(id: string, payload: unknown): void;
 };
 
-const backend = (window as { __JUCE__?: { backend: Backend } }).__JUCE__?.backend;
+const backend = (globalThis as { __JUCE__?: { backend: Backend } }).__JUCE__?.backend;
 export const inApp = backend !== undefined;
 
 let nextId = 0;

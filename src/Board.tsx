@@ -9,10 +9,11 @@ import {
   type Connection, type Edge, type EdgeProps, type Node, type NodeProps, type OnConnectEnd,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { PanelLeftClose, PanelLeftOpen, Replace, Trash2, X } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen, Replace, Search, Trash2, X } from 'lucide-react';
 import { ampKnob, def, isNam, itemParams, itemsOf, makerOf, variantOf, type DeviceType, type Item, type Jack, type JackKind } from './catalog';
 import { CabStudio } from './CabStudio';
 import { Captures, DND_FILE } from './Captures';
+import { Picker } from './Picker';
 import type { Entry } from './library';
 import {
   AMP_SWITCHES, AmpChannel, CaptureSelect, colorOf, credit, deviceName, Gear, Knob, knobParams, LooperScreen, MicControls, ModelPlate, plateParams,
@@ -353,7 +354,8 @@ function DeviceControls({ d }: { d: Device }) {
 // What a device can be swapped for: any pedal for a pedal, any amp for an amp, any cab for a cab.
 function replacements(d: Device): Item[] {
   if (d.type === 'amp' || d.type === 'cab') return itemsOf(d.type);
-  return PEDAL_TYPES.includes(d.type) ? PEDAL_TYPES.flatMap(itemsOf) : [];
+  if (d.type === 'namPedal') return [...PEDAL_TYPES, 'namPedal' as DeviceType].flatMap(itemsOf);
+  return PEDAL_TYPES.includes(d.type) ? [...PEDAL_TYPES, 'namPedal' as DeviceType].flatMap(itemsOf) : [];
 }
 const sameItem = (d: Device, i: Item) => i.type === d.type && (i.variant === undefined || i.variant === variantOf(d.type, d.params));
 
@@ -371,6 +373,34 @@ function Head({ d, onClose }: { d: Device; onClose: () => void }) {
   );
 }
 
+// What a device can be swapped for, searchable and grouped like the gear list. Cables and the pedalboard
+// it sits on are kept (rig.ts replaceDevice).
+function ReplaceSelect({ d, onReplaced }: { d: Device; onReplaced: (id: string) => void }) {
+  const { edit } = useContext(RigCtx);
+  const options = replacements(d);
+  if (!options.length) return null;
+  const group = (t: DeviceType) => GROUPS.find(([, types]) => types.includes(t))?.[0] ?? 'Other';
+  const key = (i: Item) => `${i.type}:${i.variant ?? ''}`;
+  const current = options.find((i) => sameItem(d, i));
+  return (
+    <label className="field"><span><Replace size={14} strokeWidth={1.5} /> replace with</span>
+      <Picker label="Replace with" value={current && key(current)} placeholder={deviceName(d)}
+        options={options.map((i) => ({ value: key(i), label: i.name, group: group(i.type), hint: makerOf(i.type, itemParams(i)) }))}
+        onChange={(v) => {
+          const item = options.find((i) => key(i) === v);
+          if (!item || (current && key(current) === v)) return;
+          let next = d.id;
+          edit((r) => {
+            const [rig, nid] = replaceDevice(r, d.id, item.type, itemParams(item));
+            next = nid;
+            return rig;
+          });
+          onReplaced(next);
+        }} />
+    </label>
+  );
+}
+
 // Double-click: the device, big, with every control, plus Replace and Delete.
 function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => void; onReplaced: (id: string) => void }) {
   const ctx = useContext(RigCtx);
@@ -378,8 +408,6 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
   if (!d) return null;
   const size = gearSize(d);
   const k = Math.min(1.9, 540 / size.w, 600 / size.h); // fill the preview, leaving room for the rendered sides
-  const options = replacements(d);
-  const current = options.findIndex((i) => sameItem(d, i));
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => el?.focus()} aria-label={tapeName(ctx.rig, d)}>
@@ -396,22 +424,7 @@ function DeviceWindow({ id, onClose, onReplaced }: { id: string; onClose: () => 
           )}
           <div className="modal-side">
             {d.type !== 'cab' && <DeviceControls d={d} />}
-            {options.length > 0 && (
-              <label className="field"><span><Replace size={14} strokeWidth={1.5} /> replace with</span>
-                <select value={current} onChange={(e) => {
-                  const item = options[Number(e.target.value)];
-                  let next = id;
-                  ctx.edit((r) => {
-                    const [rig, nid] = replaceDevice(r, id, item.type, itemParams(item));
-                    next = nid;
-                    return rig;
-                  });
-                  onReplaced(next);
-                }}>
-                  {options.map((o, i) => <option key={`${o.type}:${o.variant}`} value={i}>{o.name}</option>)}
-                </select>
-              </label>
-            )}
+            <ReplaceSelect d={d} onReplaced={onReplaced} />
             <button className="remove" onClick={() => { ctx.edit((r) => removeDevice(r, id)); onClose(); }}>
               <Trash2 size={16} strokeWidth={1.5} />Delete <kbd>⌫</kbd>
             </button>
@@ -490,6 +503,8 @@ function Inspector({ d, onClose }: { d: Device; onClose: () => void }) {
 // The gear list: every piece drawn small, grouped like a shop wall. Click to add, or drag it in.
 function Locker({ collapsed, onCollapse, onAdd, onSettings }: { collapsed: boolean; onCollapse: (c: boolean) => void; onAdd: (item: Item) => void; onSettings: () => void }) {
   const [tab, setTab] = useState<'gear' | 'captures'>('gear');
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
   if (collapsed) {
     return (
       <nav className="locker collapsed" aria-label="Gear">
@@ -506,12 +521,19 @@ function Locker({ collapsed, onCollapse, onAdd, onSettings }: { collapsed: boole
         </div>
         <button className="icon" title="Hide (\)" aria-label="Hide the gear list" onClick={() => onCollapse(true)}><PanelLeftClose size={16} strokeWidth={1.5} /></button>
       </header>
-      {tab === 'captures' ? <Captures onSettings={onSettings} /> : <span className="locker-hint">Click to add, or drag onto the rig or a cable</span>}
-      {tab === 'gear' && GROUPS.map(([group, types]) => (
+      {tab === 'captures' ? <Captures onSettings={onSettings} /> : (
+        <>
+          <label className="search locker-search"><Search size={14} strokeWidth={1.5} aria-hidden />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search gear" aria-label="Search gear" /></label>
+          <span className="locker-hint">Click to add, or drag onto the rig or a cable</span>
+        </>
+      )}
+      {tab === 'gear' && GROUPS.map(([group, types]) => [group, types.flatMap(itemsOf).filter((i) => !q || `${i.name} ${group} ${makerOf(i.type, itemParams(i))}`.toLowerCase().includes(q))] as const)
+        .filter(([, items]) => items.length).map(([group, items]) => (
         <section key={group}>
           <h3>{group}</h3>
           <div className="locker-grid">
-            {types.flatMap(itemsOf).map((item) => (
+            {items.map((item) => (
               <button key={`${item.type}:${item.variant}`} className="locker-item" draggable title={`${makerOf(item.type, itemParams(item))} ${item.name}`}
                 onDragStart={(e) => { e.dataTransfer.setData(DND, JSON.stringify(item)); e.dataTransfer.effectAllowed = 'copy'; }}
                 onClick={() => onAdd(item)}>
@@ -523,6 +545,7 @@ function Locker({ collapsed, onCollapse, onAdd, onSettings }: { collapsed: boole
           </div>
         </section>
       ))}
+      {tab === 'gear' && q && !GROUPS.some(([g, types]) => types.flatMap(itemsOf).some((i) => `${i.name} ${g} ${makerOf(i.type, itemParams(i))}`.toLowerCase().includes(q))) && <p className="hint locker-none">No gear matches.</p>}
     </nav>
   );
 }

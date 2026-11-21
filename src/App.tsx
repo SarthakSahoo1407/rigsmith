@@ -4,7 +4,9 @@ import {
   ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Trash2, Undo2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { Board, type Edit } from './Board';
+import { Picker } from './Picker';
 import { LiveMode, type Stage } from './Live';
+import { Mixer } from './Mixer';
 import { download, failed, models, refresh as refreshLibrary, resolve, setKey, signIn, signOut, tone, useLibrary } from './library';
 import { GearDefs, type Live } from './gear';
 import { call, inApp, on, type Meter, type State } from './native';
@@ -12,7 +14,7 @@ import { DEFAULT_PRESET, PRESETS, SETS } from './presets';
 import { commit, compile, history, parseRig, redo, toggle, undo, type History, type Rig } from './rig';
 import type { SetScene } from './sets';
 
-type View = 'board' | 'grid' | 'live';
+type View = 'board' | 'grid' | 'live' | 'mixer';
 
 const AUTOSAVE = '_autosave';
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -20,7 +22,7 @@ const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A�
 const toLevel = (peak: number) => Math.max(0, Math.min(1, (20 * Math.log10(peak || 1e-6) + 60) / 60));
 
 const KEYS: [string, string][] = [
-  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['L', 'Live mode'], ['1 – 9, space', 'In Live mode: pick a scene, next scene (← → too); Q–O stomp'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
+  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['X', 'Mixer'], ['L', 'Live mode'], ['1 – 9, space', 'In Live mode: pick a scene, next scene (← → too); Q–O stomp'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
   ['1 – 9', 'Stomp pedal 1–9 in signal order'], ['B', 'Bypass the selected device'], ['P', 'Plug the selected device into power'],
   ['Enter', 'Open the selected device'], ['⌫', 'Delete the selected device or cable'], ['Esc', 'Close / deselect'],
   ['\\', 'Show or hide the gear list'], ['⌘Z  ⇧⌘Z', 'Undo / redo'], ['⌘S', 'Save preset'], ['⌘O  ⌘E', 'Open / export a .rigsmith file'], ['?', 'This list'],
@@ -277,7 +279,7 @@ export function App() {
     const act = {
       l: () => setView('live'),
       arrowleft: () => step(-1), arrowright: () => step(1), '[': () => step(-1), ']': () => step(1),
-      v: () => setView((x) => (x === 'board' ? 'grid' : 'board')), m: () => setMute(!muted), i: muteInputs, t: () => setTuner(true), '?': () => setHelp(true), ',': () => setSettings(true),
+      v: () => setView((x) => (x === 'board' ? 'grid' : 'board')), x: () => setView((x) => (x === 'mixer' ? 'board' : 'mixer')), m: () => setMute(!muted), i: muteInputs, t: () => setTuner(true), '?': () => setHelp(true), ',': () => setSettings(true),
     }[k];
     if (act) { e.preventDefault(); act(); }
   };
@@ -336,6 +338,7 @@ export function App() {
         <div className="segmented" role="group" aria-label="View">
           <button aria-pressed={view === 'board'} onClick={() => setView('board')} title="Board (V)">Board</button>
           <button aria-pressed={view === 'grid'} onClick={() => setView('grid')} title="Grid (V)">Grid</button>
+          <button aria-pressed={view === 'mixer'} onClick={() => setView('mixer')} title="Mixer (X)">Mixer</button>
           <button aria-pressed={view === 'live'} onClick={() => setView('live')} title="Live mode (L)">Live</button>
         </div>
         <div className="tool-group">
@@ -346,19 +349,11 @@ export function App() {
           {saving === null ? (
             <>
               <button className="icon" title="Previous preset (←)" aria-label="Previous preset" onClick={() => step(-1)}><ChevronLeft {...icon} /></button>
-              <select className="preset-select" aria-label="Preset" value={current?.key ?? ''} onChange={(e) => load(e.target.value)}>
-                <option value="" disabled>Unsaved rig</option>
-                {categories.map((cat) => (
-                  <optgroup key={cat} label={cat}>
-                    {Object.entries(PRESETS).filter(([, p]) => p.category === cat).map(([n]) => <option key={n} value={`b:${n}`}>{n}</option>)}
-                  </optgroup>
-                ))}
-                {presets.length > 0 && (
-                  <optgroup label="Your presets">
-                    {presets.map((n) => <option key={n} value={`u:${n}`}>{n}</option>)}
-                  </optgroup>
-                )}
-              </select>
+              <Picker className="preset-picker" label="Preset" favorites="favs" placeholder="Unsaved rig" value={current?.key} onChange={load}
+                options={[
+                  ...categories.flatMap((cat) => Object.entries(PRESETS).filter(([, p]) => p.category === cat).map(([n]) => ({ value: `b:${n}`, label: n, group: cat }))),
+                  ...presets.map((n) => ({ value: `u:${n}`, label: n, group: 'Your presets' })),
+                ]} />
               <button className="icon" title="Next preset (→)" aria-label="Next preset" onClick={() => step(1)}><ChevronRight {...icon} /></button>
               {current && current.rig !== h.present && <span className="edited">edited</span>}
               <button className="icon" title="Save as preset (⌘S)" aria-label="Save as preset" onClick={() => setSaving(userPreset ?? '')}><Save {...icon} /></button>
@@ -424,6 +419,8 @@ export function App() {
           stage={stage} setStage={setStage} flash={flash}
           onExit={() => setView('board')} onTune={() => setTuner(true)} muted={muted} onMute={() => setMute(!muted)}
           levels={{ in: meter.peak, out: meter.out }} live={live} />
+      ) : view === 'mixer' ? (
+        <Mixer rig={h.present} edit={edit} levels={{ in: meter.peak, out: meter.out }} />
       ) : (
         <ReactFlowProvider>
           <Board rig={h.present} view={view} edit={edit} flash={flash} inputs={audio.inputs ?? []} live={live} onSettings={() => setSettings(true)}
