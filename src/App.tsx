@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
-  ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Trash2, Undo2, Volume2, VolumeX, X,
+  ChevronLeft, ChevronRight, Download, FolderOpen, Keyboard, MicOff, Mic, Redo2, Save, Settings2, Sparkles, Trash2, Undo2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { Board, type Edit } from './Board';
+import { Assistant, AssistantSettings } from './Assistant';
 import { Picker } from './Picker';
 import { LiveMode, type Stage } from './Live';
 import { Mixer } from './Mixer';
@@ -22,7 +23,7 @@ const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A�
 const toLevel = (peak: number) => Math.max(0, Math.min(1, (20 * Math.log10(peak || 1e-6) + 60) / 60));
 
 const KEYS: [string, string][] = [
-  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['X', 'Mixer'], ['L', 'Live mode'], ['1 – 9, space', 'In Live mode: pick a scene, next scene (← → too); Q–O stomp'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
+  ['← →', 'Previous / next preset'], ['V', 'Board / Grid'], ['X', 'Mixer'], ['L', 'Live mode'], ['1 – 9, space', 'In Live mode: pick a scene, next scene (← → too); Q–O stomp'], ['/', 'Ask the assistant (type a change)'], ['T', 'Tuner'], ['M', 'Mute output'], ['I', 'Mute guitar input'],
   ['1 – 9', 'Stomp pedal 1–9 in signal order'], ['B', 'Bypass the selected device'], ['P', 'Plug the selected device into power'],
   ['Enter', 'Open the selected device'], ['⌫', 'Delete the selected device or cable'], ['Esc', 'Close / deselect'],
   ['\\', 'Show or hide the gear list'], ['⌘Z  ⇧⌘Z', 'Undo / redo'], ['⌘S', 'Save preset'], ['⌘O  ⌘E', 'Open / export a .rigsmith file'], ['?', 'This list'],
@@ -143,9 +144,11 @@ function Settings({ audio, onClose }: { audio: State; onClose: () => void }) {
           {error && <p className="inline-error" role="alert">{error}</p>}
           <button className="powered" onClick={() => call('openUrl', 'https://www.tone3000.com')}>Powered by TONE3000</button>
         </section>
+        <AssistantSettings />
         <section>
           <h3>Inside Rigsmith</h3>
           <ul className="credits">
+            <li>Assistant through OpenRouter</li>
             <li>Neural Amp Modeler core by Steven Atkinson, MIT license</li>
             <li>Eigen, MPL 2.0</li>
             <li>JUCE 8, AGPLv3 or commercial license</li>
@@ -173,6 +176,7 @@ export function App() {
   const [muted, setMuted] = useState(false);
   const [tuning, setTuning] = useState(false);
   const [help, setHelp] = useState(false);
+  const [asking, setAsking] = useState(false);
   const [settings, setSettings] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [stage, setStage] = useState<Stage>({ set: `b:${Object.keys(SETS)[0]}`, at: -1 });
@@ -292,6 +296,7 @@ export function App() {
     if (e.altKey) return;
     if (tuning && (k === 't' || k === 'escape')) { setTuner(false); return; }
     if (help && (k === 'escape' || k === '?')) { setHelp(false); return; }
+    if (k === '/' ) { e.preventDefault(); setAsking(true); return; }
     if (settings && k === 'escape') { setSettings(false); return; }
     // Live.tsx has its own keys for scenes and footswitches; tuner, mute and settings still work there.
     if (view === 'live') {
@@ -401,6 +406,7 @@ export function App() {
         </div>
         <div className="spacer" />
         <div className="io">
+          <button className={`icon${asking ? ' active' : ''}`} onClick={() => setAsking(!asking)} title="Ask the assistant (/)" aria-label="Ask the assistant" aria-pressed={asking}><Sparkles {...icon} /></button>
           <Tempo bpm={tempoOf(h.present)} onChange={(v, g) => edit((r) => setTempo(r, v), g)} />
           <button className={`tuner-button${tuning ? ' on' : ''}`} onClick={() => setTuner(!tuning)} title="Tuner (T)" aria-pressed={tuning}>Tune</button>
           <button className={`icon${inputMuted ? ' alert' : ''}`} onClick={muteInputs} title={inputMuted ? 'Unmute guitar input (I)' : 'Mute guitar input (I)'} aria-pressed={inputMuted} aria-label="Mute guitar input">
@@ -461,6 +467,7 @@ export function App() {
           </div>
         </div>
       )}
+      {asking && <Assistant getRig={() => hRef.current?.present} edit={edit} onUndo={() => apply(undo(hRef.current!))} onSettings={() => { setAsking(false); setSettings(true); }} onClose={() => setAsking(false)} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );

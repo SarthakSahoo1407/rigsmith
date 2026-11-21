@@ -20,6 +20,7 @@ A guitar rig simulator for macOS, as an app and as an AU/VST3 plugin. Place as m
 - **Amps.** Clean, drive and lead channels with their own gain and EQ, bright/deep/fat switches, power tubes (EL34, 6L6, KT88, EL84), bias, sag and supply voltage.
 - **Cab and mic studio.** Up to four mics per cab, dragged anywhere on the speaker, each with level, pan, distance, angle, time-align, polarity and solo, mixed to the cab's stereo outs. Or real IRs in two slots with a blend and low/high cut.
 - **Tempo.** One BPM for the whole rig (type it, nudge it with ↑ ↓, or tap). Delays and chorus, flanger, phaser and tremolo can lock to a note length (1/2 to 1/16, dotted and triplet) instead of a free time or rate. Standalone only: a plugin doesn't read the host's tempo yet.
+- **Assistant.** Press `/` (or the sparkle button) and type a change: "more reverb", "a bit less gain", "swap the delay for a tape echo", "add a delay after the reverb", "remove the chorus", "tempo 96". A language model on OpenRouter's free tier (key in Settings) turns it into a short list of edits that Rigsmith checks and applies as one undo step; anything it gets wrong is skipped and shown. Only your request and a list of the rig's blocks and knobs are sent.
 - **Presets:** 44 built-in presets (clean, acoustic, crunch, lead, metal, ambient, live rigs, NAM captures, hybrids of captures and modelled gear), plus your own.
 - **Tools:**
   - a standalone tuner

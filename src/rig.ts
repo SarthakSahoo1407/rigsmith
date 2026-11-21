@@ -211,6 +211,46 @@ export function insertIntoCable(rig: Rig, cableId: string, id: string): Rig {
   return connect(r, { device: id, jack: outJack }, c.to);
 }
 
+// Puts a new device right after `afterId` in its signal path: into the cable leaving it, or, with
+// nothing plugged in there, cabled straight to it. On the board it takes the slot between the two
+// pedals. Powers it if it needs power. Returns the rig and the new device's id.
+export function insertAfter(rig: Rig, afterId: string, type: DeviceType, params: Record<string, number> = {}): [Rig, string] {
+  const after = rig.devices[afterId];
+  const [inJack, outJack] = [mainJack(type, 'in'), mainJack(type, 'out')];
+  if (!after || !inJack || !outJack) throw new Error(`A ${def(type).label} can't go after that`);
+  const afterOut = mainJack(after.type, 'out');
+  if (!afterOut) throw new Error(`Nothing comes out of ${def(after.type).label}`);
+  const from = { device: afterId, jack: afterOut };
+  const cable = rig.cables.find((c) => same(c.from, from));
+  const next = cable && rig.devices[cable.to.device];
+  const x = next && next.type !== 'amp' && next.type !== 'output' ? (after.pos.board.x + next.pos.board.x) / 2 : after.pos.board.x - 400;
+  let [r, id] = addDevice(rig, type, { x, y: after.pos.board.y });
+  for (const [k, v] of Object.entries(params)) r = setParam(r, id, k, v);
+  // A stereo pair (reverb out L and R to the interface's L and R): the new device takes over both sides,
+  // or just the left when it has one output (a mono signal into L plays on both sides).
+  const outs = (t: DeviceType) => def(t).jacks.filter((j) => j.dir === 'out' && j.kind !== 'power').map((j) => j.name);
+  const right = outs(after.type)[0] === afterOut ? outs(after.type)[1] : undefined;
+  const rightCable = right ? rig.cables.find((c) => same(c.from, { device: afterId, jack: right })) : undefined;
+  r = cable ? insertIntoCable(r, cable.id, id) : connect(r, from, { device: id, jack: inJack });
+  if (cable && rightCable) {
+    r = disconnect(r, rightCable.id);
+    const newRight = outs(type)[1];
+    if (newRight) r = connect(r, { device: id, jack: newRight }, rightCable.to);
+  }
+  return [powerUp(r, id), id];
+}
+
+// Removes a device and joins the cables around it, so the signal still flows.
+export function removeAndBridge(rig: Rig, id: string): Rig {
+  const d = rig.devices[id];
+  const [inJack, outJack] = [mainJack(d.type, 'in'), mainJack(d.type, 'out')];
+  const src = inJack ? rig.cables.find((c) => c.to.device === id && c.to.jack === inJack)?.from : undefined;
+  const dst = outJack ? rig.cables.find((c) => c.from.device === id && c.from.jack === outJack)?.to : undefined;
+  let r = removeDevice(rig, id);
+  if (src && dst) { try { r = connect(r, src, dst); } catch { /* the two ends don't fit: left unplugged */ } }
+  return r;
+}
+
 // Swaps a device for another one in the same place: same position and on/off, cables moved to the
 // matching jacks (a stereo output's right side is dropped going into a mono pedal). Same type: only
 // the given knobs change. Returns the rig and the new device's id.

@@ -6,6 +6,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "Engine.h"
 #include "RigFile.h"
+#include "Llm.h"
 #include "Tone3000.h"
 #include <mach/mach.h>
 
@@ -44,7 +45,7 @@ struct Host
 class Bridge : private Timer
 {
 public:
-    Bridge (Engine& e, Host& h, PropertiesFile& s) : engine (e), host (h), settings (s), t3k (s) {}
+    Bridge (Engine& e, Host& h, PropertiesFile& s) : engine (e), host (h), settings (s), t3k (s), llm (s) {}
     ~Bridge() override { stopTimer(); }
 
     void attach (WebBrowserComponent& w)
@@ -116,7 +117,11 @@ public:
             .withNativeFunction ("t3kSearch", [this] (Args a, Done done) { t3k.search (a[0], done); })
             .withNativeFunction ("t3kTone", [this] (Args a, Done done) { t3k.tone (a[0].toString(), done); })
             .withNativeFunction ("t3kModels", [this] (Args a, Done done) { t3k.models (a[0].toString(), done); })
-            .withNativeFunction ("t3kDownload", [this] (Args a, Done done) { t3k.download (a[0], a[1], done); });
+            .withNativeFunction ("t3kDownload", [this] (Args a, Done done) { t3k.download (a[0], a[1], done); })
+            // The text assistant (Llm.h): chat (request), the free models, and its status.
+            .withNativeFunction ("llmStatus", [this] (Args, Done done) { done (llm.status()); })
+            .withNativeFunction ("llmChat", [this] (Args a, Done done) { llm.chat (a[0], done); })
+            .withNativeFunction ("llmModels", [this] (Args, Done done) { llm.freeModels (done); });
     }
 
 private:
@@ -124,6 +129,7 @@ private:
     Host& host;
     PropertiesFile& settings;
     Tone3000 t3k;
+    Llm llm;
     WebBrowserComponent* web = nullptr;
     std::unique_ptr<FileChooser> chooser;
     int ticks = 0;
@@ -143,6 +149,8 @@ private:
     void set (const String& key, const var& v)
     {
         if (key == "mute") engine.muted = (bool) v;
+        if (key == "orKey") { settings.setValue ("orKey", v.toString().trim()); emit ("state", state()); }
+        if (key == "orModel") settings.setValue ("orModel", v.toString().trim());
         if (key == "t3kKey") { settings.setValue ("t3kKey", v.toString().trim()); emit ("state", state()); }
         if (key == "volume")
         {

@@ -446,3 +446,86 @@ describe('BPM sync', () => {
     expect(parseRig(JSON.stringify(rig)).tempo).toBe(90);
   });
 });
+
+describe('text assistant', async () => {
+  const { applyPlan, describeRig, parsePlan } = await import('./ops');
+  const { PRESETS } = await import('./presets');
+  const { isPowered } = await import('./rig');
+  const base = PRESETS['Ambient swells'].build();
+  const find = (rig: Rig, type: string) => Object.values(rig.devices).find((d) => d.type === type)!;
+  const reverb = find(base, 'reverb'), delay = find(base, 'delay');
+
+  it('reads a reply however the model wrapped it, and drops what it does not know', () => {
+    const plan = parsePlan('Sure!\n```json\n{"ops":[{"op":"nudge","target":"a","param":"mix","by":5},{"op":"launch","target":"x"},{"op":"remove"},{"op":"tempo","bpm":"96"}],"say":"ok"}\n```');
+    expect(plan.ops).toEqual([{ op: 'nudge', target: 'a', param: 'mix', by: 1 }, { op: 'tempo', bpm: 96 }]);
+    expect(() => parsePlan('no json here')).toThrow(/understandable/);
+    expect(parsePlan('{"ops":[],"ask":"Which delay?"}').ask).toBe('Which delay?');
+  });
+
+  it('describes every block with its knobs and ranges', () => {
+    const text = describeRig(base);
+    expect(text).toContain(`id=${reverb.id}`);
+    expect(text).toMatch(/mix=[\d.]+ \[0\.\.1\]/);
+  });
+
+  it('"more reverb": nudges the mix, clamped to the knob\'s range', () => {
+    const { rig, done } = applyPlan(base, { ops: [{ op: 'nudge', target: reverb.id, param: 'mix', by: 0.2 }] });
+    expect(rig.devices[reverb.id].params.mix).toBeCloseTo(Math.min(1, reverb.params.mix + 0.2));
+    expect(done).toHaveLength(1);
+    expect(applyPlan(base, { ops: [{ op: 'set', target: reverb.id, param: 'mix', value: 7 }] }).rig.devices[reverb.id].params.mix).toBe(1);
+  });
+
+  it('finds a block by name or kind, and a choice knob by its text', () => {
+    const r = applyPlan(base, { ops: [{ op: 'set', target: 'reverb', param: 'model', value: 'Spring' }] });
+    expect(r.failed).toEqual([]);
+    expect(r.rig.devices[reverb.id].params.model).toBe(3);
+  });
+
+  it('"change the delay to analog": swaps it and keeps its cables', () => {
+    const { rig } = applyPlan(base, { ops: [{ op: 'replace', target: delay.id, with: 'Analog Delay' }] });
+    const now = find(rig, 'delay');
+    expect(now.params.model).toBe(2);
+    expect(rig.cables.filter((c) => c.from.device === now.id || c.to.device === now.id).length)
+      .toBe(base.cables.filter((c) => c.from.device === delay.id || c.to.device === delay.id).length);
+  });
+
+  it('"add a delay after the reverb": goes in the reverb\'s cable, powered', () => {
+    const into = base.cables.find((c) => c.from.device === reverb.id && c.from.jack === 'outL')!;
+    const { rig, failed } = applyPlan(base, { ops: [{ op: 'add', item: 'Tape Echo', after: reverb.id }] });
+    expect(failed).toEqual([]);
+    const added = Object.values(rig.devices).find((d) => d.type === 'delay' && d.id !== delay.id && !base.devices[d.id])!;
+    expect(added.params.model).toBe(1);
+    expect(isPowered(rig, added.id)).toBe(true);
+    expect(rig.cables.some((c) => c.from.device === reverb.id && c.to.device === added.id)).toBe(true);
+    expect(rig.cables.some((c) => c.from.device === added.id && c.to.device === into.to.device)).toBe(true);
+    expect(rig.cables.some((c) => c.from.device === reverb.id && c.to.device === into.to.device)).toBe(false);
+    // a stereo pair stays stereo: the delay's right output takes the reverb's old right cable
+    expect(rig.cables.some((c) => c.from.device === added.id && c.from.jack === 'outR' && c.to.jack === 'R')).toBe(true);
+  });
+
+  it('"remove the reverb": the cables around it are joined', () => {
+    const into = base.cables.find((c) => c.to.device === reverb.id)!, out = base.cables.find((c) => c.from.device === reverb.id)!;
+    const { rig } = applyPlan(base, { ops: [{ op: 'remove', target: reverb.id }] });
+    expect(rig.devices[reverb.id]).toBeUndefined();
+    expect(rig.cables.some((c) => c.from.device === into.from.device && c.to.device === out.to.device)).toBe(true);
+  });
+
+  it('a bad operation is reported and the good ones still apply; the interface stays', () => {
+    const out = find(base, 'output');
+    const { rig, done, failed } = applyPlan(base, { ops: [
+      { op: 'nudge', target: 'ghost-9', param: 'mix', by: 0.1 }, { op: 'remove', target: out.id }, { op: 'set', target: reverb.id, param: 'nope', value: 1 },
+      { op: 'tempo', bpm: 90 },
+    ] });
+    expect(failed).toHaveLength(3);
+    expect(done).toEqual(['tempo 90 BPM']);
+    expect(rig.devices[out.id]).toBeDefined();
+  });
+
+  it('an amp\'s gain goes to the knob of its active channel', () => {
+    let rig = PRESETS['Shred lead'].build();
+    const amp = find(rig, 'amp');
+    rig = applyPlan(rig, { ops: [{ op: 'set', target: amp.id, param: 'gain', value: 3 }] }).rig;
+    const key = ['cleanGain', 'gain', 'leadGain'][amp.params.channel];
+    expect(rig.devices[amp.id].params[key]).toBe(3);
+  });
+});
